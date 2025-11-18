@@ -55,7 +55,7 @@ FROM base AS backend
 WORKDIR /app
 COPY [ "backend/","/app/" ]
 RUN npm config set strict-ssl false && \
-    npm install --prod && \
+    npm install && \
     ls -al
 
 #FROM base as python
