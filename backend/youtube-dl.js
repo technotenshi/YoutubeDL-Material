@@ -27,11 +27,16 @@ exports.youtubedl_forks = {
 }
 
 exports.runYoutubeDL = async (url, args, customDownloadHandler = null) => {
+    logger.info(`Preparing to download URL '${url}' (${args.length} args) using ${customDownloadHandler ? 'custom handler' : 'default process'}.`);
     const output_file_path = getYoutubeDLPath();
-    if (!fs.existsSync(output_file_path)) await exports.checkForYoutubeDLUpdate();
+    if (!fs.existsSync(output_file_path)) {
+        logger.info('Binary missing locally, triggering update check before running youtube-dl.');
+        await exports.checkForYoutubeDLUpdate();
+    }
     let callback = null;
     let child_process = null;
     if (customDownloadHandler) {
+        logger.debug('Invoking custom youtube-dl handler.');
         callback = runYoutubeDLCustom(url, args, customDownloadHandler);
     } else {
         ({callback, child_process} = await runYoutubeDLProcess(url, args));
@@ -46,6 +51,11 @@ const runYoutubeDLCustom = async (url, args, customDownloadHandler) => {
     return new Promise(resolve => {
         downloadHandler(url, args, {maxBuffer: Infinity}, async function(err, output) {
             const parsed_output = utils.parseOutputJSON(output, err);
+            if (err) {
+                logger.error(`Custom handler download failed for URL '${url}': ${err}`);
+            } else {
+                logger.info(`Custom handler finished download for URL '${url}'.`);
+            }
             resolve({parsed_output, err});
         });
     });
@@ -60,13 +70,17 @@ const runYoutubeDLProcess = async (url, args, youtubedl_fork = config_api.getCon
         logger.error(err);
         return;
     }
+    logger.info(`Spawning ${youtubedl_fork} process for URL '${url}' with ${args.length} args.`);
     const child_process = execa(getYoutubeDLPath(youtubedl_fork), [url, ...args], {maxBuffer: Infinity});
     const callback = new Promise(async resolve => {
         try {
             const {stdout, stderr} = await child_process;
             const parsed_output = utils.parseOutputJSON(stdout.trim().split(/\r?\n/), stderr);
+            logger.info(`youtube-dl process for '${url}' completed successfully.`);
             resolve({parsed_output, err: stderr});
         } catch (e) {
+            logger.error(`youtube-dl process for '${url}' exited with error.`);
+            logger.error(e);
             resolve({parsed_output: null, err: e})
         }
     });
@@ -80,10 +94,16 @@ function getYoutubeDLPath(youtubedl_fork = config_api.getConfigItem('ytdl_defaul
 }
 
 exports.killYoutubeDLProcess = async (child_process) => {
+    if (!child_process) {
+        logger.warn('killYoutubeDLProcess called without a valid child process.');
+        return;
+    }
+    logger.info(`Killing youtube-dl process with pid ${child_process.pid}.`);
     kill(child_process.pid, 'SIGKILL');
 }
 
 exports.checkForYoutubeDLUpdate = async () => {
+    logger.info('Checking for youtube-dl binary updates.');
     const selected_fork = config_api.getConfigItem('ytdl_default_downloader');
     const output_file_path = getYoutubeDLPath();
     // get current version
@@ -102,13 +122,17 @@ exports.checkForYoutubeDLUpdate = async () => {
     if (!fs.existsSync(output_file_path) || current_fork !== selected_fork || !current_version || current_version !== latest_version) {
         logger.warn(`Updating ${selected_fork} binary to '${output_file_path}', downloading...`);
         await exports.updateYoutubeDL(latest_version);
+    } else {
+        logger.info(`${selected_fork} binary already at latest version ${current_version}.`);
     }
 }
 
 exports.updateYoutubeDL = async (latest_update_version, custom_output_path = null) => {
+    logger.info(`Updating youtube-dl binary to version ${latest_update_version}.`);
     await fs.ensureDir(path.join('appdata', 'bin'));
     const default_downloader = config_api.getConfigItem('ytdl_default_downloader');
     await downloadLatestYoutubeDLBinaryGeneric(default_downloader, latest_update_version, custom_output_path);
+    logger.info(`youtube-dl binary update complete for version ${latest_update_version}.`);
 }
 
 async function downloadLatestYoutubeDLBinaryGeneric(youtubedl_fork, new_version, custom_output_path = null) {
@@ -119,10 +143,12 @@ async function downloadLatestYoutubeDLBinaryGeneric(youtubedl_fork, new_version,
     const output_path = custom_output_path || getYoutubeDLPath(youtubedl_fork);
 
     try {
+        logger.info(`Downloading ${youtubedl_fork} binary version ${new_version} from ${download_url}.`);
         await utils.fetchFile(download_url, output_path, `${youtubedl_fork} ${new_version}`);
         fs.chmod(output_path, 0o777);
 
         updateDetailsJSON(new_version, youtubedl_fork, output_path);
+        logger.info(`Successfully downloaded ${youtubedl_fork} version ${new_version} to ${output_path}.`);
     } catch (e) {
         logger.error(`Failed to download new ${youtubedl_fork} version: ${new_version}`);
         logger.error(e);
@@ -132,6 +158,7 @@ async function downloadLatestYoutubeDLBinaryGeneric(youtubedl_fork, new_version,
 
 exports.getLatestUpdateVersion = async (youtubedl_fork) => {
     const tags_url = exports.youtubedl_forks[youtubedl_fork]['tags_url'];
+    logger.info(`Checking ${youtubedl_fork} repository for the latest release.`);
     return new Promise(resolve => {
         fetch(tags_url, {method: 'Get'})
         .then(async res => res.json())
@@ -142,6 +169,7 @@ exports.getLatestUpdateVersion = async (youtubedl_fork) => {
                 return;
             }
             const latest_update_version = json[0]['name'];
+            logger.info(`Latest ${youtubedl_fork} version detected: ${latest_update_version}.`);
             resolve(latest_update_version);
         })
         .catch(err => {
@@ -162,4 +190,5 @@ function updateDetailsJSON(new_version, fork, output_path) {
     fork_json['path'] = output_path; // unused
     fork_json['exec'] = fork + file_ext; // unused
     fs.writeJSONSync(CONSTS.DETAILS_BIN_PATH, details_json);
+    logger.debug(`Updated binary details JSON for fork ${fork} (${new_version}).`);
 }
