@@ -548,6 +548,8 @@ exports.generateArgs = async (url, type, options, user_uid = null, simulated = f
 
             // force yt-dlp to use Node.js as JS runtime
             downloadConfig.push('--js-runtimes', 'node');
+
+            downloadConfig.push('--remote-components','ejs:github');
         }
 
     }
