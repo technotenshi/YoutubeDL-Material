@@ -22,7 +22,7 @@ ENV ALLOW_CONFIG_MUTATIONS=true
 ENV npm_config_cache=/app/.npm
 
 # Use NVM to get specific node version
-ENV NODE_VERSION=16.14.2
+ENV NODE_VERSION=22.21.1
 RUN groupadd -g $GID $USER && useradd --system -m -g $USER --uid $UID $USER && \
     apt update && \
     apt install -y --no-install-recommends curl ca-certificates tzdata libicu70 libatomic1 && \
@@ -32,14 +32,14 @@ RUN groupadd -g $GID $USER && useradd --system -m -g $USER --uid $UID $USER && \
 RUN mkdir /usr/local/nvm
 ENV PATH="/usr/local/nvm/versions/node/v${NODE_VERSION}/bin/:${PATH}"
 ENV NVM_DIR=/usr/local/nvm
-RUN curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.5/install.sh | bash
+RUN curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
 RUN . "$NVM_DIR/nvm.sh" && nvm install ${NODE_VERSION}
 RUN . "$NVM_DIR/nvm.sh" && nvm use v${NODE_VERSION}
 RUN . "$NVM_DIR/nvm.sh" && nvm alias default v${NODE_VERSION}
 
 # Build frontend
 ARG BUILDPLATFORM
-FROM --platform=${BUILDPLATFORM} node:16 as frontend
+FROM --platform=${BUILDPLATFORM} node:22 AS frontend
 RUN npm install -g @angular/cli
 WORKDIR /build
 COPY [ "package.json", "package-lock.json", "angular.json", "tsconfig.json", "/build/" ]
@@ -52,7 +52,7 @@ RUN rm -rf node_modules
 
 
 # Install backend deps
-FROM base as backend
+FROM base AS backend
 WORKDIR /app
 COPY [ "backend/","/app/" ]
 RUN npm config set strict-ssl false && \

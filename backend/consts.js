@@ -349,7 +349,8 @@ const YTDL_ARGS_WITH_VALUES = [
     '--fixup',
     '--ffmpeg-location',
     '--exec',
-    '--convert-subs'
+    '--convert-subs',
+    '--js-runtimes'
 ];
 
 exports.SUBSCRIPTION_BACKUP_PATH = 'subscription_backup.json'

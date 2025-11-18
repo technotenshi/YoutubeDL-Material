@@ -545,6 +545,9 @@ exports.generateArgs = async (url, type, options, user_uid = null, simulated = f
 
             // in yt-dlp -j --no-simulate is preferable
             downloadConfig.push('--no-clean-info-json', '-j', '--no-simulate');
+
+            // force yt-dlp to use Node.js as JS runtime
+            downloadConfig.push('--js-runtimes', 'node');
         }
 
     }

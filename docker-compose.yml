@@ -1,4 +1,4 @@
-version: "2"
+---
 services:
     ytdl_material:
         environment: 
@@ -9,14 +9,15 @@ services:
         depends_on:
             - ytdl-mongo-db
         volumes:
-            - ./appdata:/app/appdata
-            - ./audio:/app/audio
-            - ./video:/app/video
-            - ./subscriptions:/app/subscriptions
-            - ./users:/app/users
+            - appdata:/app/appdata
+            - audio:/app/audio
+            - video:/app/video
+            - subscriptions:/app/subscriptions
+            - users:/app/users
         ports:
             - "8998:17442"
-        image: tzahi12345/youtubedl-material:latest
+        build:
+          context: .
     ytdl-mongo-db:
         # If you are using a Raspberry Pi, use mongo:4.4.18
         image: mongo:4
@@ -26,3 +27,11 @@ services:
         restart: always
         volumes:
             - ./db/:/data/db
+
+volumes:
+  appdata:
+  audio:
+  video:
+  subscriptions:
+  users:
+  
