@@ -2,7 +2,7 @@ name: docker-pr
 
 on:
   pull_request:
-    branches: [master]
+    branches: [main]
 
 jobs:
   build-and-push:
@@ -35,4 +35,4 @@ jobs:
           platforms: linux/amd64,linux/arm/v7,linux/arm64/v8
           #platforms: linux/amd64
           push: false
-          tags: tzahi12345/youtubedl-material:nightly-pr
+          tags: technotenshi/youtubedl-material:nightly-pr
