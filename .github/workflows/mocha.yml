@@ -13,10 +13,10 @@ jobs:
   test:
     name: 'Backend - mocha'
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        node:
-          - 16
+      strategy:
+        matrix:
+          node:
+          - 22
     steps:
       - uses: actions/setup-node@v4
         with:
