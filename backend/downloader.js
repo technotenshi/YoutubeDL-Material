@@ -50,6 +50,7 @@ We use checkDownloads() to move downloads through the steps and call their respe
 
 exports.createDownload = async (url, type, options, user_uid = null, sub_id = null, sub_name = null, prefetched_info = null, paused = false) => {
     return await mutex.runExclusive(async () => {
+        logger.info(`Queueing new ${type} download for URL '${url}'${user_uid ? ` (user ${user_uid})` : ''}.`);
         const download = {
             url: url,
             type: type,
@@ -102,12 +103,18 @@ exports.resumeDownload = async (download_uid) => {
 
         const success = db_api.updateRecord('download_queue', {uid: download_uid}, {paused: false});
         should_check_downloads = true;
+        if (success) logger.info(`Resumed download ${download_uid}.`);
         return success;
     })
 }
 
 exports.restartDownload = async (download_uid) => {
     const download = await db_api.getRecord('download_queue', {uid: download_uid});
+    if (!download) {
+        logger.warn(`Attempted to restart missing download ${download_uid}.`);
+        return null;
+    }
+    logger.info(`Restarting download ${download_uid}.`);
     await exports.clearDownload(download_uid);
     const new_download = await exports.createDownload(download['url'], download['type'], download['options'], download['user_uid']);
     
@@ -133,6 +140,7 @@ exports.cancelDownload = async (download_uid) => {
 }
 
 exports.clearDownload = async (download_uid) => {
+    logger.debug(`Removing download ${download_uid} from queue.`);
     return await db_api.removeRecord('download_queue', {uid: download_uid});
 }
 
@@ -140,11 +148,13 @@ async function handleDownloadError(download_uid, error_message, error_type = nul
     if (!download_uid) return;
     const download = await db_api.getRecord('download_queue', {uid: download_uid});
     if (!download || download['error']) return;
+    logger.error(`Download ${download_uid} failed: ${error_message}${error_type ? ` (${error_type})` : ''}`);
     notifications_api.sendDownloadErrorNotification(download, download['user_uid'], error_message, error_type);
     await db_api.updateRecord('download_queue', {uid: download['uid']}, {error: error_message, finished: true, running: false, error_type: error_type});
 }
 
 exports.setupDownloads = async () => {
+    logger.info('Initializing download manager background tasks.');
     await fixDownloadState();
     setInterval(checkDownloads, 1000);
 }
@@ -153,6 +163,9 @@ async function fixDownloadState() {
     const downloads = await db_api.getRecords('download_queue');
     downloads.sort((download1, download2) => download1.timestamp_start - download2.timestamp_start);
     const running_downloads = downloads.filter(download => !download['finished'] && !download['error']);
+    if (running_downloads.length > 0) {
+        logger.warn(`Resetting ${running_downloads.length} in-progress downloads after restart.`);
+    }
     for (let i = 0; i < running_downloads.length; i++) {
         const running_download = running_downloads[i];
         const update_obj = {finished_step: true, paused: true, running: false};
@@ -187,6 +200,7 @@ async function checkDownloads() {
         if (max_concurrent_downloads < 0 || running_downloads_count >= max_concurrent_downloads) break;
 
         if (waiting_download['finished_step'] && !waiting_download['finished']) {
+            logger.debug(`Advancing download ${waiting_download['uid']} to step ${waiting_download['step_index'] + 1}.`);
             if (waiting_download['sub_id']) {
                 const sub_missing = !(await db_api.getRecord('subscriptions', {id: waiting_download['sub_id']}));
                 if (sub_missing) {
@@ -208,8 +222,11 @@ async function checkDownloads() {
 function killActiveDownload(download) {
     const child_process = download_to_child_process[download['uid']];
     if (download['step_index'] === 2 && child_process) {
+        logger.info(`Terminating active process for download ${download['uid']}.`);
         youtubedl_api.killYoutubeDLProcess(child_process);
         delete download_to_child_process[download['uid']];
+    } else {
+        logger.debug(`No active process to kill for download ${download['uid']}.`);
     }
 }
 
@@ -232,6 +249,9 @@ exports.collectInfo = async (download_uid) => {
     }
 
     let args = await exports.generateArgs(url, type, options, download['user_uid']);
+
+    // Do not log sensitive arguments such as passwords
+    logger.info('args', redactSensitiveArgs(args));
 
     // get video info prior to download
     let info = download['prefetched_info'] ? download['prefetched_info'] : await exports.getVideoInfoByURL(url, args, download_uid);
@@ -418,6 +438,7 @@ exports.downloadQueuedFile = async(download_uid, customDownloadHandler = null) =
 
             const file_uids = file_objs.map(file_obj => file_obj.uid);
             await db_api.updateRecord('download_queue', {uid: download_uid}, {finished_step: true, finished: true, running: false, step_index: 3, percent_complete: 100, file_uids: file_uids, container: container});
+            logger.info(`Download ${download_uid} completed with ${file_objs.length} file(s).`);
             resolve(file_uids);
         }
     });
@@ -545,6 +566,12 @@ exports.generateArgs = async (url, type, options, user_uid = null, simulated = f
 
             // in yt-dlp -j --no-simulate is preferable
             downloadConfig.push('--no-clean-info-json', '-j', '--no-simulate');
+
+            // force yt-dlp to use Node.js as JS runtime
+            logger.info('Setting js runtime as node.')
+            downloadConfig.push('--js-runtimes', 'node');
+
+            downloadConfig.push('--remote-components','ejs:github');
         }
 
     }
@@ -552,8 +579,51 @@ exports.generateArgs = async (url, type, options, user_uid = null, simulated = f
     // filter out incompatible args
     downloadConfig = filterArgs(downloadConfig, is_audio);
 
-    if (!simulated) logger.verbose(`${default_downloader} args being used: ${downloadConfig.join(',')}`);
+    if (!simulated) {
+        // Avoid logging clear-text credentials in the args
+        const redactedArgs = redactSensitiveArgs(downloadConfig);
+        logger.verbose(`${default_downloader} args being used: ${redactedArgs.join(',')}`);
+    }
     return downloadConfig;
+}
+
+/**
+ * Returns a copy of the provided args array with sensitive options (such as
+ * --password and their values, and optionally usernames) removed or masked
+ * so they are safe to log.
+ */
+function redactSensitiveArgs(args) {
+    if (!Array.isArray(args)) {
+        return args;
+    }
+
+    const redacted = [];
+    const SENSITIVE_FLAGS = new Set(['--password']);
+    const MAYBE_SENSITIVE_FLAGS = new Set(['--username']);
+
+    for (let i = 0; i < args.length; i++) {
+        const current = args[i];
+
+        if (SENSITIVE_FLAGS.has(current)) {
+            // Skip the flag and its value completely
+            i++; // skip value
+            continue;
+        }
+
+        if (MAYBE_SENSITIVE_FLAGS.has(current)) {
+            redacted.push(current);
+            // Mask the associated value if present
+            if (i + 1 < args.length) {
+                redacted.push('***');
+                i++; // skip original value
+            }
+            continue;
+        }
+
+        redacted.push(current);
+    }
+
+    return redacted;
 }
 
 exports.getVideoInfoByURL = async (url, args = [], download_uid = null) => {
@@ -568,6 +638,7 @@ exports.getVideoInfoByURL = async (url, args = [], download_uid = null) => {
 
     new_args.push('--dump-json');
 
+    logger.debug(`Fetching metadata for URL '${url}' with args count ${new_args.length}.`);
     let {callback} = await youtubedl_api.runYoutubeDL(url, new_args);
     const {parsed_output, err} = await callback;
     if (!parsed_output || parsed_output.length === 0) {
@@ -580,6 +651,7 @@ exports.getVideoInfoByURL = async (url, args = [], download_uid = null) => {
         return null;
     }
 
+    logger.debug(`Successfully retrieved metadata for URL '${url}'.`);
     return parsed_output;
 }
 

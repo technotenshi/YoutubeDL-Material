@@ -77,6 +77,7 @@ function setDB(input_db, input_users_db) {
     db = input_db; users_db = input_users_db;
     exports.db = input_db;
     exports.users_db = input_users_db
+    logger.debug('Database handles refreshed.');
 }
 
 exports.initialize = (input_db, input_users_db, db_name = 'local_db.json') => {
@@ -85,15 +86,18 @@ exports.initialize = (input_db, input_users_db, db_name = 'local_db.json') => {
     // must be done here to prevent getConfigItem from being called before init
     using_local_db = config_api.getConfigItem('ytdl_use_local_db');
 
+    logger.info(`Initializing local database adapter with file '${db_name}'.`);
     const local_adapter = new FileSync(`./appdata/${db_name}`);
     local_db = low(local_adapter);
 
     const local_db_defaults = {}
     tables_list.forEach(table => {local_db_defaults[table] = []});
     local_db.defaults(local_db_defaults).write();
+    logger.debug('Local database defaults ensured.');
 }
 
 exports.connectToDB = async (retries = 5, no_fallback = false, custom_connection_string = null) => {
+    logger.info(`Attempting MongoDB connection${custom_connection_string ? ' using custom string' : ''}.`);
     const success = await exports._connectToDB(custom_connection_string);
     if (success) return true;
 
@@ -134,6 +138,7 @@ exports._connectToDB = async (custom_connection_string = null) => {
     });
 
     try {
+        logger.debug('Opening MongoDB connection.');
         await client.connect();
         database = client.db('ytdl_material');
 
@@ -157,7 +162,11 @@ exports._connectToDB = async (custom_connection_string = null) => {
                 await database.collection(table).createIndex(text_search);
             }
         });
+        if (missing_tables.length) {
+            logger.info(`Created missing MongoDB collections: ${missing_tables.join(', ')}`);
+        }
         using_local_db = false; // needs to happen for tests (in normal operation using_local_db is guaranteed false)
+        logger.info('MongoDB connection established and indexes ensured.');
         return true;
     } catch(err) {
         logger.error(err);
@@ -242,6 +251,7 @@ exports.getFileDirectoriesAndDBs = async () => {
         });
     }
 
+    logger.debug(`Prepared ${dirs_to_check.length} directories for synchronization checks.`);
     return dirs_to_check;
 }
 
@@ -254,6 +264,7 @@ exports.insertRecordIntoTable = async (table, doc, replaceFilter = null) => {
     if (using_local_db) {
         if (replaceFilter) local_db.get(table).remove((doc) => _.isMatch(doc, replaceFilter)).write();
         local_db.get(table).push(doc).write();
+        logger.debug(`Inserted doc into ${table} (local${replaceFilter ? ', replaced existing' : ''}).`);
         return true;
     }
 
@@ -291,6 +302,7 @@ exports.insertRecordsIntoTable = async (table, docs, ignore_errors = false) => {
                 local_db.get(table).push(...records_to_push).write();
             }
         }
+        logger.debug(`Inserted ${docs.length} docs into ${table} (local).`);
         return true;
     }
     const output = await database.collection(table).insertMany(docs, {ordered: !ignore_errors});
@@ -323,10 +335,14 @@ exports.bulkInsertRecordsIntoTable = async (table, docs) => {
 exports.getRecord = async (table, filter_obj) => {
     // local db override
     if (using_local_db) {
-        return exports.applyFilterLocalDB(local_db.get(table), filter_obj, 'find').value();
+        const record = exports.applyFilterLocalDB(local_db.get(table), filter_obj, 'find').value();
+        logger.debug(`Fetched single record from ${table} (local) with filter ${JSON.stringify(filter_obj)}`);
+        return record;
     }
 
-    return await database.collection(table).findOne(filter_obj);
+    const record = await database.collection(table).findOne(filter_obj);
+    logger.debug(`Fetched single record from ${table} with filter ${JSON.stringify(filter_obj)}`);
+    return record;
 }
 
 exports.getRecords = async (table, filter_obj = null, return_count = false, sort = null, range = null) => {
@@ -339,7 +355,10 @@ exports.getRecords = async (table, filter_obj = null, return_count = false, sort
         if (range) {
             cursor = cursor.slice(range[0], range[1]);
         }
-        return !return_count ? cursor : cursor.length;
+        const result = !return_count ? cursor : cursor.length;
+        const count = return_count ? result : result.length;
+        logger.debug(`Fetched ${count} record(s) from ${table} (local).`);
+        return result;
     }
 
     const cursor = filter_obj ? database.collection(table).find(filter_obj) : database.collection(table).find();
@@ -350,7 +369,10 @@ exports.getRecords = async (table, filter_obj = null, return_count = false, sort
         cursor.skip(range[0]).limit(range[1] - range[0]);
     }
 
-    return !return_count ? await cursor.toArray() : await cursor.count();
+    const result = !return_count ? await cursor.toArray() : await cursor.count();
+    const count = return_count ? result : result.length;
+    logger.debug(`Fetched ${count} record(s) from ${table}.`);
+    return result;
 }
 
 // Update
@@ -362,16 +384,20 @@ exports.updateRecord = async (table, filter_obj, update_obj, nested_mode = false
             // if object is nested we need to handle it differently
             update_obj = utils.convertFlatObjectToNestedObject(update_obj);
             exports.applyFilterLocalDB(local_db.get(table), filter_obj, 'find').merge(update_obj).write();
+            logger.debug(`Updated nested record in ${table} (local) with filter ${JSON.stringify(filter_obj)}.`);
             return true;
         }
         exports.applyFilterLocalDB(local_db.get(table), filter_obj, 'find').assign(update_obj).write();
+        logger.debug(`Updated record in ${table} (local) with filter ${JSON.stringify(filter_obj)}.`);
         return true;
     }
 
     // sometimes _id will be in the update obj, this breaks mongodb
     if (update_obj['_id']) delete update_obj['_id'];
     const output = await database.collection(table).updateOne(filter_obj, {$set: update_obj});
-    return !!(output['result']['ok']);
+    const success = !!(output['result']['ok']);
+    if (success) logger.debug(`Updated record in ${table} with filter ${JSON.stringify(filter_obj)}.`);
+    return success;
 }
 
 exports.updateRecords = async (table, filter_obj, update_obj) => {
@@ -385,11 +411,14 @@ exports.updateRecords = async (table, filter_obj, update_obj) => {
                 record[prop_to_update] = prop_value;
             }
         }).write();
+        logger.debug(`Bulk-updated records in ${table} (local) with filter ${JSON.stringify(filter_obj)}.`);
         return true;
     }
 
     const output = await database.collection(table).updateMany(filter_obj, {$set: update_obj});
-    return !!(output['result']['ok']);
+    const success = !!(output['result']['ok']);
+    if (success) logger.debug(`Bulk-updated records in ${table} with filter ${JSON.stringify(filter_obj)}.`);
+    return success;
 }
 
 exports.removePropertyFromRecord = async (table, filter_obj, remove_obj) => {
@@ -397,11 +426,14 @@ exports.removePropertyFromRecord = async (table, filter_obj, remove_obj) => {
     if (using_local_db) {
         const props_to_remove = Object.keys(remove_obj);
         exports.applyFilterLocalDB(local_db.get(table), filter_obj, 'find').unset(props_to_remove).write();
+        logger.debug(`Removed properties ${props_to_remove} from ${table} record (local).`);
         return true;
     }
 
     const output = await database.collection(table).updateOne(filter_obj, {$unset: remove_obj});
-    return !!(output['result']['ok']);
+    const success = !!(output['result']['ok']);
+    if (success) logger.debug(`Removed properties from ${table} matching ${JSON.stringify(filter_obj)}.`);
+    return success;
 }
 
 exports.bulkUpdateRecordsByKey = async (table, key_label, update_obj) => {
@@ -418,6 +450,7 @@ exports.bulkUpdateRecordsByKey = async (table, key_label, update_obj) => {
                 record[prop_to_update] = prop_value;
             }
         }).write();
+        logger.debug(`Bulk-updated records in ${table} by key '${key_label}' (local).`);
         return true;
     }
 
@@ -435,29 +468,37 @@ exports.bulkUpdateRecordsByKey = async (table, key_label, update_obj) => {
     }
 
     const output = await bulk.execute();
-    return !!(output['result']['ok']);
+    const success = !!(output['result']['ok']);
+    if (success) logger.debug(`Bulk-updated records in ${table} by key '${key_label}'.`);
+    return success;
 }
 
 exports.pushToRecordsArray = async (table, filter_obj, key, value) => {
     // local db override
     if (using_local_db) {
         exports.applyFilterLocalDB(local_db.get(table), filter_obj, 'find').get(key).push(value).write();
+        logger.debug(`Pushed value to array '${key}' in ${table} (local).`);
         return true;
     }
 
     const output = await database.collection(table).updateOne(filter_obj, {$push: {[key]: value}});
-    return !!(output['result']['ok']);
+    const success = !!(output['result']['ok']);
+    if (success) logger.debug(`Pushed value to array '${key}' in ${table}.`);
+    return success;
 }
 
 exports.pullFromRecordsArray = async (table, filter_obj, key, value) => {
     // local db override
     if (using_local_db) {
         exports.applyFilterLocalDB(local_db.get(table), filter_obj, 'find').get(key).pull(value).write();
+        logger.debug(`Pulled value from array '${key}' in ${table} (local).`);
         return true;
     }
 
     const output = await database.collection(table).updateOne(filter_obj, {$pull: {[key]: value}});
-    return !!(output['result']['ok']);
+    const success = !!(output['result']['ok']);
+    if (success) logger.debug(`Pulled value from array '${key}' in ${table}.`);
+    return success;
 }
 
 // Delete
@@ -466,11 +507,14 @@ exports.removeRecord = async (table, filter_obj) => {
     // local db override
     if (using_local_db) {
         exports.applyFilterLocalDB(local_db.get(table), filter_obj, 'remove').write();
+        logger.debug(`Removed record from ${table} (local) with filter ${JSON.stringify(filter_obj)}.`);
         return true;
     }
 
     const output = await database.collection(table).deleteOne(filter_obj);
-    return !!(output['result']['ok']);
+    const success = !!(output['result']['ok']);
+    if (success) logger.debug(`Removed record from ${table} with filter ${JSON.stringify(filter_obj)}.`);
+    return success;
 }
 
 // exports.removeRecordsByUIDBulk = async (table, uids) => {
@@ -586,6 +630,7 @@ const getDBTableStats = async (table) => {
 // JSON to DB
 
 exports.generateJSONTables = async (db_json, users_json) => {
+    logger.info('Converting DB JSON exports into table records.');
     // create records
     let files = db_json['files'] || [];
     let playlists = db_json['playlists'] || [];
@@ -631,6 +676,7 @@ exports.generateJSONTables = async (db_json, users_json) => {
 }
 
 exports.importJSONToDB = async (db_json, users_json) => {
+    logger.info('Importing JSON payloads into the database.');
     await fs.writeFile(`appdata/db.json.${Date.now()/1000}.bak`, JSON.stringify(db_json, null, 2));
     await fs.writeFile(`appdata/users_db.json.${Date.now()/1000}.bak`, JSON.stringify(users_json, null, 2));
 
@@ -646,6 +692,11 @@ exports.importJSONToDB = async (db_json, users_json) => {
         success &= await exports.insertRecordsIntoTable(table_key, tables_obj[table_key], true);
     }
 
+    if (success) {
+        logger.info('JSON import completed successfully.');
+    } else {
+        logger.error('JSON import encountered errors.');
+    }
     return success;
 }
 
@@ -722,6 +773,7 @@ exports.backupDB = async () => {
     }
 
     fs.writeJsonSync(path_to_backups, table_to_records);
+    logger.info(`Database backup completed at ${path_to_backups}.`);
 
     return backup_file_name;
 }
@@ -729,6 +781,7 @@ exports.backupDB = async () => {
 exports.restoreDB = async (file_name) => {
     const path_to_backup = path.join('appdata', 'db_backup', file_name);
 
+    logger.info(`Restoring database from backup '${file_name}'.`);
     logger.debug('Reading database backup file.');
     const table_to_records = fs.readJSONSync(path_to_backup);
 
@@ -748,7 +801,7 @@ exports.restoreDB = async (file_name) => {
         success &= await exports.bulkInsertRecordsIntoTable(table, table_to_records[table]);
     }
 
-    logger.debug('Restore finished!');
+    logger.info('Database restore completed successfully.');
 
     return success;
 }
@@ -787,7 +840,7 @@ exports.transferDB = async (local_to_remote) => {
 
     config_api.setConfigItem('ytdl_use_local_db', using_local_db);
 
-    logger.debug('Transfer finished!');
+    logger.info('Database transfer completed.');
 
     return success;
 }
@@ -844,4 +897,5 @@ exports.applyFilterLocalDB = (db_path, filter_obj, operation) => {
 // should only be used for tests
 exports.setLocalDBMode = (mode) => {
     using_local_db = mode;
+    logger.warn(`Local DB mode manually set to ${mode}.`);
 }
