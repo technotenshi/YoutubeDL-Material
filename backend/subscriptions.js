@@ -64,12 +64,25 @@ async function getSubscriptionInfo(sub) {
     }
 
     let {callback} = await youtubedl_api.runYoutubeDL(sub.url, downloadConfig);
-    const {parsed_output, err} = await callback;
-    if (err) {
-        logger.error(err.stderr);
+    const {parsed_output, err, stdout, stderr} = await callback;
+    const stderr_text = (typeof stderr === 'string' && stderr.length > 0)
+        ? stderr
+        : (err && typeof err.stderr === 'string' ? err.stderr : (typeof err === 'string' ? err : ''));
+    if (stderr_text) {
+        logger.warn(`Subscribe: yt-dlp reported stderr while fetching info for '${sub.url}': ${stderr_text}`);
+    }
+    if (!parsed_output || parsed_output.length === 0) {
+        const err_message = (err && err.message) ? err.message : (typeof err === 'string' ? err : (err ? err.toString() : ''));
+        logger.error(`Subscribe: No metadata returned for '${sub.url}'.`);
+        if (err_message) logger.error(`Subscribe: yt-dlp error details: ${err_message}`);
+        if (stdout) {
+            const stdout_text = stdout.toString();
+            const stdout_snippet = stdout_text.length > 800 ? `${stdout_text.slice(0, 800)}...[truncated ${stdout_text.length - 800} chars]` : stdout_text;
+            logger.error(`Subscribe: yt-dlp stdout sample: ${stdout_snippet}`);
+        }
         return false;
     }
-    logger.verbose('Subscribe: got info for subscription ' + sub.id);
+    logger.verbose(`Subscribe: got info for subscription ${sub.id} (${parsed_output.length} entries).`);
     for (const output_json of parsed_output) {
         if (!output_json) {
             continue;
@@ -294,11 +307,20 @@ async function _getVideosForSub(sub) {
 
     let {child_process, callback} = await youtubedl_api.runYoutubeDL(sub.url, downloadConfig);
     updateSubscriptionProperty(sub, {child_process: child_process}, user_uid);
-    const {parsed_output, err} = await callback;
+    const {parsed_output, err, stdout, stderr, exitCode, signal} = await callback;
     updateSubscriptionProperty(sub, {downloading: false, child_process: null}, user_uid);
-    if (!parsed_output) {
+    let output_jsons = parsed_output;
+    if (!output_jsons && stdout && stdout.toString().trim().length > 0) {
+        output_jsons = utils.parseOutputJSON(stdout.toString().trim().split(/\r?\n/), err || {stderr});
+        if (output_jsons && output_jsons.length > 0) {
+            logger.warn(`Subscription check for ${sub.name} reported errors, continuing with ${output_jsons.length} available entries.`);
+        }
+    }
+    if (!output_jsons) {
         logger.error('Subscription check failed!');
-        if (err) logger.error(err);
+        if (stderr) logger.error(stderr);
+        else if (err) logger.error(err);
+        else if (exitCode || signal) logger.error(`Subscription check exited with code ${exitCode || 'unknown'} (signal ${signal || 'none'}).`);
         return null;
     }
 
@@ -310,7 +332,7 @@ async function _getVideosForSub(sub) {
     }
 
     logger.verbose('Subscription: finished check for ' + sub.name);
-    const files_to_download = await handleOutputJSON(parsed_output, sub, user_uid);
+    const files_to_download = await handleOutputJSON(output_jsons, sub, user_uid);
     return files_to_download;
 }
 
@@ -376,7 +398,7 @@ async function generateArgsForSubscription(sub, user_uid, redownload = false, de
         fullOutput = `"${appendedBasePath}/${sub.custom_output}.%(ext)s"`;
     }
 
-    let downloadConfig = ['--dump-json', '-o', fullOutput, !redownload ? '-ciw' : '-ci', '--write-info-json', '--print-json'];
+    let downloadConfig = ['--dump-json', '-o', fullOutput, !redownload ? '-ciw' : '-ci', '--write-info-json', '--print-json', '--ignore-errors'];
 
     let qualityPath = null;
     if (sub.type && sub.type === 'audio') {
@@ -435,6 +457,12 @@ async function generateArgsForSubscription(sub, user_uid, redownload = false, de
     const default_downloader = config_api.getConfigItem('ytdl_default_downloader');
     if (default_downloader === 'yt-dlp') {
         downloadConfig.push('--no-clean-info-json');
+
+        // force yt-dlp to use Node.js as JS runtime
+        logger.info('Setting js runtime as node.')
+        downloadConfig.push('--js-runtimes', 'node');
+
+        downloadConfig.push('--remote-components','ejs:github');
     }
 
     downloadConfig = utils.filterArgs(downloadConfig, ['--write-comments']);

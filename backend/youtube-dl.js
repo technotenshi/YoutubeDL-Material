@@ -71,17 +71,18 @@ const runYoutubeDLProcess = async (url, args, youtubedl_fork = config_api.getCon
         return;
     }
     logger.info(`Spawning ${youtubedl_fork} process for URL '${url}' with ${args.length} args.`);
+    logger.info(JSON.stringify(args));
     const child_process = execa(getYoutubeDLPath(youtubedl_fork), [url, ...args], {maxBuffer: Infinity});
     const callback = new Promise(async resolve => {
         try {
             const {stdout, stderr} = await child_process;
             const parsed_output = utils.parseOutputJSON(stdout.trim().split(/\r?\n/), stderr);
             logger.info(`youtube-dl process for '${url}' completed successfully.`);
-            resolve({parsed_output, err: stderr});
+            resolve({parsed_output, err: stderr, stdout, stderr});
         } catch (e) {
             logger.error(`youtube-dl process for '${url}' exited with error.`);
             logger.error(e);
-            resolve({parsed_output: null, err: e})
+            resolve({parsed_output: null, err: e, stdout: e.stdout, stderr: e.stderr, exitCode: e.exitCode, signal: e.signal})
         }
     });
     return {child_process, callback}

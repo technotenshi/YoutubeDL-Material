@@ -250,6 +250,8 @@ exports.collectInfo = async (download_uid) => {
 
     let args = await exports.generateArgs(url, type, options, download['user_uid']);
 
+    logger.info('args', args);
+
     // get video info prior to download
     let info = download['prefetched_info'] ? download['prefetched_info'] : await exports.getVideoInfoByURL(url, args, download_uid);
 
@@ -565,6 +567,7 @@ exports.generateArgs = async (url, type, options, user_uid = null, simulated = f
             downloadConfig.push('--no-clean-info-json', '-j', '--no-simulate');
 
             // force yt-dlp to use Node.js as JS runtime
+            logger.info('Setting js runtime as node.')
             downloadConfig.push('--js-runtimes', 'node');
 
             downloadConfig.push('--remote-components','ejs:github');
