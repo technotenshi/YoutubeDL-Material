@@ -250,7 +250,8 @@ exports.collectInfo = async (download_uid) => {
 
     let args = await exports.generateArgs(url, type, options, download['user_uid']);
 
-    logger.info('args', args);
+    // Do not log sensitive arguments such as passwords
+    logger.info('args', redactSensitiveArgs(args));
 
     // get video info prior to download
     let info = download['prefetched_info'] ? download['prefetched_info'] : await exports.getVideoInfoByURL(url, args, download_uid);
@@ -578,8 +579,51 @@ exports.generateArgs = async (url, type, options, user_uid = null, simulated = f
     // filter out incompatible args
     downloadConfig = filterArgs(downloadConfig, is_audio);
 
-    if (!simulated) logger.verbose(`${default_downloader} args being used: ${downloadConfig.join(',')}`);
+    if (!simulated) {
+        // Avoid logging clear-text credentials in the args
+        const redactedArgs = redactSensitiveArgs(downloadConfig);
+        logger.verbose(`${default_downloader} args being used: ${redactedArgs.join(',')}`);
+    }
     return downloadConfig;
+}
+
+/**
+ * Returns a copy of the provided args array with sensitive options (such as
+ * --password and their values, and optionally usernames) removed or masked
+ * so they are safe to log.
+ */
+function redactSensitiveArgs(args) {
+    if (!Array.isArray(args)) {
+        return args;
+    }
+
+    const redacted = [];
+    const SENSITIVE_FLAGS = new Set(['--password']);
+    const MAYBE_SENSITIVE_FLAGS = new Set(['--username']);
+
+    for (let i = 0; i < args.length; i++) {
+        const current = args[i];
+
+        if (SENSITIVE_FLAGS.has(current)) {
+            // Skip the flag and its value completely
+            i++; // skip value
+            continue;
+        }
+
+        if (MAYBE_SENSITIVE_FLAGS.has(current)) {
+            redacted.push(current);
+            // Mask the associated value if present
+            if (i + 1 < args.length) {
+                redacted.push('***');
+                i++; // skip original value
+            }
+            continue;
+        }
+
+        redacted.push(current);
+    }
+
+    return redacted;
 }
 
 exports.getVideoInfoByURL = async (url, args = [], download_uid = null) => {
