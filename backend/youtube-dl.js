@@ -71,7 +71,6 @@ const runYoutubeDLProcess = async (url, args, youtubedl_fork = config_api.getCon
         return;
     }
     logger.info(`Spawning ${youtubedl_fork} process for URL '${url}' with ${args.length} args.`);
-    logger.info(JSON.stringify(args));
     const child_process = execa(getYoutubeDLPath(youtubedl_fork), [url, ...args], {maxBuffer: Infinity});
     const callback = new Promise(async resolve => {
         try {
