@@ -11,6 +11,9 @@ on:
 
 jobs:
   build-and-push:
+    # Fork publishing disabled: only the upstream repo may push images.
+    # Remove this condition (and configure DOCKERHUB_* secrets) to re-enable.
+    if: github.repository == 'Tzahi12345/YoutubeDL-Material'
     runs-on: ubuntu-latest
 
     steps:

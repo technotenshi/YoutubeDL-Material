@@ -43,3 +43,17 @@ Consult `DEVELOPMENT.md`, both `package.json` files, `angular.json`, and `.githu
 - Keep runtime databases, cookies, downloaded media, logs, installed dependencies, and generated frontend output out of commits. Treat existing ignore rules as a starting point and inspect the final diff.
 
 Initialization scanned source and configuration only; dependencies were absent and builds/tests were not run.
+
+## Agent skills
+
+### Issue tracker
+
+Issues are tracked as GitHub Issues on `technotenshi/YoutubeDL-Material` using the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: root `CONTEXT.md` plus `docs/adr/`. See `docs/agents/domain.md`.
