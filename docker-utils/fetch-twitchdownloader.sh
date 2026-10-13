@@ -28,7 +28,8 @@ esac
 VERSION=$TWITCHDOWNLOADER_VERSION
 echo "(INFO) Architecture detected: $ARCH, pinned version: $VERSION"
 echo "(1/5) READY - Install unzip"
-apt-get update && apt-get -y install unzip curl libicu70
+apt-get update
+apt-get -y install unzip curl libicu70
 echo "(2/5) DOWNLOAD - Acquire twitchdownloader"
 curl -o twitchdownloader.zip \
     --fail \

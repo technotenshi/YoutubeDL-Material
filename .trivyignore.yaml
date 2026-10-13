@@ -1,0 +1,9 @@
+misconfigurations:
+  - id: AVD-DS-0002
+    paths:
+      - Dockerfile
+    statement: >-
+      The entrypoint needs root to fix bind mount ownership and honor custom
+      UID/GID values, then uses gosu to run the application as UID/GID 1000 by
+      default. A USER instruction would prevent that ownership setup. This
+      intentional root phase is documented in issue #12 and the Dockerfile.
