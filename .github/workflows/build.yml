@@ -2,11 +2,11 @@ name: continuous integration
 
 on:
   push:
-    branches: [master, feat/*]
+    branches: [main, feat/*]
     tags:
       - v*
   pull_request:
-      branches: [master]
+      branches: [main]
 
 jobs:
   build:
@@ -33,7 +33,7 @@ jobs:
         run: echo "::set-output name=date::$(date +'%Y-%m-%d')"
       - name: create-json
         id: create-json
-        uses: jsdaniell/create-json@v1.2.2
+        uses: jsdaniell/create-json@v1.2.3
         with:
           name: "version.json"
           json: '{"type": "autobuild", "tag": "N/A", "commit": "${{ steps.vars.outputs.sha_short }}", "date": "${{ steps.date.outputs.date }}"}'
@@ -55,7 +55,7 @@ jobs:
           Copy-Item -Path ./backend/*.js -Destination ./build/youtubedl-material
           Copy-Item -Path ./backend/*.json -Destination ./build/youtubedl-material
       - name: upload build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: youtubedl-material
           path: build
@@ -81,7 +81,7 @@ jobs:
           draft: true
           prerelease: false
       - name: download build artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v6
         with:
           name: youtubedl-material
           path: ${{runner.temp}}/youtubedl-material
@@ -100,12 +100,3 @@ jobs:
           asset_path: ./youtubedl-material-${{ steps.tag_name.outputs.tag_name }}.zip
           asset_name: youtubedl-material-${{ steps.tag_name.outputs.tag_name }}.zip
           asset_content_type: application/zip
-      - name: upload docker-compose asset
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./docker-compose.yml
-          asset_name: docker-compose.yml
-          asset_content_type: text/plain
