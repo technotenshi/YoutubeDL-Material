@@ -46,3 +46,11 @@ Documentation for the compatibility option: [npm ci](https://github.com/npm/cli/
 - Dropped the `feat/*` push trigger. It ran the build twice for a PR from a `feat/*` branch, once for the push and once for `pull_request`. Pushes to `main` and `v*` tags still build; path filters are not evaluated for tag pushes, so releases always build.
 - No ruleset requires this check, so a skipped run cannot block a merge. If it becomes a required check, a skipped path filtered workflow stays pending and blocks merging.
 - `docker-pr.yml` already had its own path filter for the Docker image build. `mocha.yml` and the security workflows still run on every PR.
+
+## 2026-10-12 Add a code-review agent skill for Copilot (#31)
+
+- Added `.github/skills/code-review/SKILL.md`. GitHub documents that a review-focused directory name such as `code-review` is how to make sure Copilot code review reads a skill. It is the path Copilot reads for project skills.
+- It is a short checklist of what to look for: untrusted input reaching downloader arguments (#15), the publishing fork guard (#19 to #22), workflow hygiene, docs matching the current head, generated and runtime files, and translations edited in the XLF sources. It links to `AGENTS.md` and `.github/copilot-instructions.md` instead of repeating them, and tells the reviewer to state when there are no critical or high issues.
+- `allowed-tools` is omitted on purpose, so the skill pre-approves no shell tools.
+- `gh skill publish .github/skills --dry-run` validates it with no errors. It still warns that no tag protection ruleset exists, which is a repository setting and unrelated to the skill. The command only discovers `skills/*/SKILL.md` style layouts, so pass the `.github/skills` directory explicitly.
+- Pending: after merge, a Copilot review of a PR that touches a workflow must show an attribution that names this skill. This is checked after merge, as the ticket specifies. Record the result on #31.
