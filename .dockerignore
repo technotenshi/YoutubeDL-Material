@@ -5,3 +5,10 @@ audio
 video
 subscriptions
 users
+# Docker only reads this file at the context root, so backend/.dockerignore is never used.
+# Patterns here are anchored at the root: node_modules alone would miss backend/node_modules.
+**/node_modules
+# Local runtime files (database, users, cookies, logs, backups) stay out of the image.
+# The default config the backend needs is the one file kept.
+backend/appdata/*
+!backend/appdata/default.json
