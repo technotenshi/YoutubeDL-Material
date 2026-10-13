@@ -62,6 +62,7 @@ jobs:
           scanners: vuln,misconfig
           ignore-unfixed: true
           severity: HIGH,CRITICAL
+          limit-severities-for-sarif: true
           format: sarif
           output: trivy-results.sarif
           # Report-only until the baseline is triaged; set to '1' to enforce.

@@ -100,12 +100,3 @@ jobs:
           asset_path: ./youtubedl-material-${{ steps.tag_name.outputs.tag_name }}.zip
           asset_name: youtubedl-material-${{ steps.tag_name.outputs.tag_name }}.zip
           asset_content_type: application/zip
-      - name: upload docker-compose asset
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./docker-compose.yml
-          asset_name: docker-compose.yml
-          asset_content_type: text/plain

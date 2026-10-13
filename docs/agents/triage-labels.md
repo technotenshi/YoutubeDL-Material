@@ -14,4 +14,4 @@ When a skill mentions a role (e.g. "apply the AFK-ready triage label"), use the 
 
 Edit the right-hand column to match whatever vocabulary you actually use.
 
-Current state of the tracker: the category labels `bug` and `enhancement` and the state label `wontfix` exist on `technotenshi/YoutubeDL-Material`. `needs-triage`, `needs-info`, `ready-for-agent`, and `ready-for-human` do not exist yet and are created when first applied.
+Labels must exist before they can be applied: `gh issue create --label` and `gh issue edit --add-label` fail on a missing label and do not create it. Create any missing label once with `gh label create <name>`, and check with `gh label list`.

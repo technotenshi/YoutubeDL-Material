@@ -11,7 +11,7 @@ paths = [
   '''package-lock\.json$''',
   '''backend/public/''',
   '''node_modules/''',
-  '''src/assets/i18n/''',
+  '''src/assets/i18n/messages\.[A-Za-z_-]+\.json$''',
 ]
 # Upstream's fixed placeholder admin token (used when auth is disabled) and the
 # Slack webhook example shown as input placeholder text.
