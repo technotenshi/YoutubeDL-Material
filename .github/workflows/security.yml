@@ -60,6 +60,7 @@ jobs:
         with:
           scan-type: fs
           scanners: vuln,misconfig
+          trivyignores: .trivyignore.yaml
           ignore-unfixed: true
           severity: HIGH,CRITICAL
           limit-severities-for-sarif: true
