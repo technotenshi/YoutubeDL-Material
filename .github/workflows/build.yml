@@ -1,12 +1,34 @@
 name: continuous integration
 
 on:
+  # Run only when an input of the app build changes. Path filters are not
+  # evaluated for tag pushes, so release tags always build.
+  # Pull requests are built by the pull_request trigger, so pushes to feature
+  # branches are not built a second time.
   push:
-    branches: [main, feat/*]
+    branches: [main]
     tags:
       - v*
+    paths:
+      - src/**
+      - backend/**
+      - package.json
+      - package-lock.json
+      - angular.json
+      - tsconfig.json
+      - .browserslistrc
+      - .github/workflows/build.yml
   pull_request:
-      branches: [main]
+    branches: [main]
+    paths:
+      - src/**
+      - backend/**
+      - package.json
+      - package-lock.json
+      - angular.json
+      - tsconfig.json
+      - .browserslistrc
+      - .github/workflows/build.yml
 
 jobs:
   build:
