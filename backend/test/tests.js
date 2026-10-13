@@ -47,7 +47,6 @@ const categories_api = require('../categories');
 const files_api = require('../files');
 const youtubedl_api = require('../youtube-dl');
 const config_api = require('../config');
-const CONSTS = require('../consts');
 
 db_api.initialize(db, users_db, 'local_db_test.json');
 
@@ -441,17 +440,30 @@ describe('Multi User', async function() {
     
 describe('Downloader', function() {
     const downloader_api = require('../downloader');
-    const url = 'https://www.youtube.com/watch?v=hpigjnKl7nI';
+    const url = 'https://www.youtube.com/watch?v=jNQXAC9IVRw';
     const playlist_url = 'https://www.youtube.com/playlist?list=PLbZT16X07RLhqK-ZgSkRuUyiz9B_WLdNK';
     const sub_id = 'dc834388-3454-41bf-a618-e11cb8c7de1c';
     const options = {
         ui_uid: uuid()
     }
 
-    async function createCategory(url) {
+    // Recorded yt-dlp output (see test/fixtures/ytdlp/README.md). Keeps this suite offline.
+    const video_info_fixture = fs.readJSONSync(path.join(__dirname, 'fixtures', 'ytdlp', 'video.info.json'));
+    const playlist_info_fixture = fs.readJSONSync(path.join(__dirname, 'fixtures', 'ytdlp', 'playlist.info.json'));
+
+    // Same seam as the 'Download file' test: a custom handler stands in for the yt-dlp process.
+    // `calls` records what getVideoInfoByURL asked yt-dlp to run.
+    function infoHandlerFor(info_fixture, calls = []) {
+        return async (url, args, handler_options, callback) => {
+            calls.push({url, args});
+            return await callback(null, info_fixture.map(info => JSON.stringify(info)));
+        };
+    }
+
+    async function createCategory(url, info_fixture) {
         // get info
         const args = await downloader_api.generateArgs(url, 'video', options, null, true);
-        const [info] = await downloader_api.getVideoInfoByURL(url, args);
+        const [info] = await downloader_api.getVideoInfoByURL(url, args, null, infoHandlerFor(info_fixture));
 
         // create category
         await db_api.removeAllRecords('categories');
@@ -471,8 +483,7 @@ describe('Downloader', function() {
     }
 
     before(async function() {
-        const update_available = await youtubedl_api.checkForYoutubeDLUpdate();
-        if (update_available) await youtubedl_api.updateYoutubeDL(update_available);
+        // no yt-dlp binary update here: this suite never runs a real downloader (see test/live)
         config_api.setConfigItem('ytdl_max_concurrent_downloads', 0);
     });
 
@@ -483,16 +494,47 @@ describe('Downloader', function() {
     });
 
     it('Get file info', async function() {
-        this.timeout(300000);
-        const info = await downloader_api.getVideoInfoByURL(url);
+        const info = await downloader_api.getVideoInfoByURL(url, [], null, infoHandlerFor(video_info_fixture));
         assert(!!info && info.length > 0);
+        assert(info[0]['id'] === video_info_fixture[0]['id']);
+    });
+
+    it('Get file info - asks yt-dlp for JSON without downloading or archiving', async function() {
+        const calls = [];
+        const args = ['--download-archive', 'archive.txt', '--no-simulate', '-f', 'best'];
+        await downloader_api.getVideoInfoByURL(url, args, null, infoHandlerFor(video_info_fixture, calls));
+        assert(calls.length === 1);
+        assert(calls[0]['url'] === url);
+        assert(calls[0]['args'].includes('--dump-json'));
+        assert(!calls[0]['args'].includes('--no-simulate'));
+        assert(!calls[0]['args'].includes('--download-archive') && !calls[0]['args'].includes('archive.txt'));
+        assert(calls[0]['args'].includes('-f') && calls[0]['args'].includes('best'));
+    });
+
+    it('Get file info - custom handler does not need the yt-dlp binary', async function() {
+        // a clean checkout has no binary; the real path would download one from GitHub
+        const binary_path = path.join('appdata', 'bin', config_api.getConfigItem('ytdl_default_downloader'));
+        const backup_path = binary_path + '.test_bak';
+        const had_binary = fs.existsSync(binary_path);
+        if (had_binary) fs.moveSync(binary_path, backup_path, {overwrite: true});
+        const original_check = youtubedl_api.checkForYoutubeDLUpdate;
+        let update_checks = 0;
+        youtubedl_api.checkForYoutubeDLUpdate = async () => { update_checks++; };
+        try {
+            const info = await downloader_api.getVideoInfoByURL(url, [], null, infoHandlerFor(video_info_fixture));
+            assert(info && info.length > 0);
+            assert(update_checks === 0);
+        } finally {
+            youtubedl_api.checkForYoutubeDLUpdate = original_check;
+            if (had_binary) fs.moveSync(backup_path, binary_path, {overwrite: true});
+        }
     });
 
     it('Download file', async function() {
-        this.timeout(300000);
+        this.timeout(30000); // ffmpeg generates the placeholder video
         await downloader_api.setupDownloads();
         const args = await downloader_api.generateArgs(url, 'video', options, null, true);
-        const [info] = await downloader_api.getVideoInfoByURL(url, args);
+        const [info] = await downloader_api.getVideoInfoByURL(url, args, null, infoHandlerFor(video_info_fixture));
         if (fs.existsSync(info['_filename'])) fs.unlinkSync(info['_filename']);
         const returned_download = await downloader_api.createDownload(url, 'video', options);
         assert(returned_download);
@@ -506,27 +548,25 @@ describe('Downloader', function() {
     });
 
     it('Downloader - categorize', async function() {
-        this.timeout(300000);
-        await createCategory(url);
-        // collect info
-        const returned_download = await downloader_api.createDownload(url, 'video', options);
+        await createCategory(url, video_info_fixture);
+        // collect info (prefetched, so collectInfo does not call yt-dlp)
+        const returned_download = await downloader_api.createDownload(url, 'video', options, null, null, null, video_info_fixture);
         await downloader_api.collectInfo(returned_download['uid']);
         assert(returned_download['category']);
         assert(returned_download['category']['name'] === 'test_category');
     });
 
     it('Downloader - categorize playlist', async function() {
-        this.timeout(300000);
-        await createCategory(playlist_url);
-        // collect info
-        const returned_download_pass = await downloader_api.createDownload(playlist_url, 'video', options);
+        await createCategory(playlist_url, playlist_info_fixture);
+        // collect info (prefetched, so collectInfo does not call yt-dlp)
+        const returned_download_pass = await downloader_api.createDownload(playlist_url, 'video', options, null, null, null, playlist_info_fixture);
         await downloader_api.collectInfo(returned_download_pass['uid']);
         assert(returned_download_pass['category']);
         assert(returned_download_pass['category']['name'] === 'test_category');
 
         // test with playlist categorization disabled
         config_api.setConfigItem('ytdl_allow_playlist_categorization', false);
-        const returned_download_fail = await downloader_api.createDownload(playlist_url, 'video', options);
+        const returned_download_fail = await downloader_api.createDownload(playlist_url, 'video', options, null, null, null, playlist_info_fixture);
         await downloader_api.collectInfo(returned_download_fail['uid']);
         assert(!returned_download_fail['category']);
     });
@@ -604,60 +644,72 @@ describe('Downloader', function() {
     describe('Twitch', async function () {
         const twitch_api = require('../twitch');
         const example_vod = '1790315420';
-        it('Download VOD chat', async function() {
-            this.timeout(300000);
-            if (!fs.existsSync('TwitchDownloaderCLI')) {
-                try {
-                    await exec('sh ../docker-utils/fetch-twitchdownloader.sh');
-                    fs.copyFileSync('../docker-utils/TwitchDownloaderCLI', 'TwitchDownloaderCLI');
-                } catch (e) {
-                    logger.info('TwitchDownloaderCLI fetch failed, file may exist regardless.');
-                }
-            }
-            const sample_path = path.join('test', 'sample.twitch_chat.json');
-            if (fs.existsSync(sample_path)) fs.unlinkSync(sample_path);
-            await twitch_api.downloadTwitchChatByVODID(example_vod, 'sample', null, null, null, './test');
-            assert(fs.existsSync(sample_path));
+        const cli_output_fixture = path.join(__dirname, 'fixtures', 'twitch', 'chatdownload.json');
+        const temp_cli_output_path = path.join('appdata', `${example_vod}.json`);
+        const sample_path = path.join('test', 'sample.twitch_chat.json');
 
-            // cleanup
-            if (fs.existsSync(sample_path)) fs.unlinkSync(sample_path);
-        });
-    });
-});
-
-describe('youtube-dl', async function() {
-    beforeEach(async function () {
-        if (fs.existsSync(CONSTS.DETAILS_BIN_PATH)) fs.unlinkSync(CONSTS.DETAILS_BIN_PATH);
-        await youtubedl_api.checkForYoutubeDLUpdate();
-    });
-    it('Check latest version', async function() {
-        this.timeout(300000);
-        const original_fork = config_api.getConfigItem('ytdl_default_downloader');
-        const latest_version = await youtubedl_api.getLatestUpdateVersion(original_fork);
-        assert(latest_version > CONSTS.OUTDATED_YOUTUBEDL_VERSION);
-    });
-
-    it('Update youtube-dl', async function() {
-        this.timeout(300000);
-        const original_fork = config_api.getConfigItem('ytdl_default_downloader');
-        const binary_path = path.join('test', 'test_binary');
-        for (const youtubedl_fork in youtubedl_api.youtubedl_forks) {
-            config_api.setConfigItem('ytdl_default_downloader', youtubedl_fork);
-            const latest_version = await youtubedl_api.checkForYoutubeDLUpdate();
-            await youtubedl_api.updateYoutubeDL(latest_version, binary_path);
-            assert(fs.existsSync(binary_path));
-            if (fs.existsSync(binary_path)) fs.unlinkSync(binary_path);
+        // Stands in for TwitchDownloaderCLI: records the command and writes the file the CLI would write.
+        function fakeCLI(calls, stderr = '') {
+            return async (command) => {
+                calls.push(command);
+                if (!stderr) fs.copyFileSync(cli_output_fixture, temp_cli_output_path);
+                return {stdout: '', stderr: stderr};
+            };
         }
-        config_api.setConfigItem('ytdl_default_downloader', original_fork);
-    });
 
-    it('Run process', async function() {
-        this.timeout(300000);
-        const downloader_api = require('../downloader');
-        const url = 'https://www.youtube.com/watch?v=hpigjnKl7nI';
-        const args = await downloader_api.generateArgs(url, 'video', {}, null, true);
-        const {child_process} = await youtubedl_api.runYoutubeDL(url, args);
-        assert(child_process);
+        beforeEach(function() {
+            if (fs.existsSync(sample_path)) fs.unlinkSync(sample_path);
+            if (fs.existsSync(temp_cli_output_path)) fs.unlinkSync(temp_cli_output_path);
+        });
+
+        afterEach(function() {
+            if (fs.existsSync(sample_path)) fs.unlinkSync(sample_path);
+            if (fs.existsSync(temp_cli_output_path)) fs.unlinkSync(temp_cli_output_path);
+        });
+
+        it('Download VOD chat', async function() {
+            const calls = [];
+            const chat = await twitch_api.downloadTwitchChatByVODID(example_vod, 'sample', null, null, null, './test', fakeCLI(calls));
+
+            // the CLI is asked for this VOD, writing to the temp file we read back
+            assert(calls.length === 1);
+            assert(calls[0].includes(`chatdownload -u ${example_vod}`));
+            assert(calls[0].includes(`-o appdata/${example_vod}.json`));
+
+            // the chat file is produced from the CLI output
+            assert(fs.existsSync(sample_path));
+            const written_chat = fs.readJSONSync(sample_path);
+            assert(JSON.stringify(written_chat) === JSON.stringify(chat));
+            assert(written_chat.length === 3);
+            assert(JSON.stringify(written_chat[0]) === JSON.stringify({
+                timestamp: 5,
+                timestamp_str: '00:00:05',
+                name: 'sample_viewer_one',
+                message: 'hello chat',
+                user_color: '#FF69B4'
+            }));
+            assert(written_chat[1]['timestamp_str'] === '00:01:05');
+            assert(written_chat[2]['timestamp_str'] === '01:02:05');
+
+            // the CLI's temp file is cleaned up
+            assert(!fs.existsSync(temp_cli_output_path));
+        });
+
+        it('Download VOD chat - CLI error writes no chat file', async function() {
+            const calls = [];
+            const chat = await twitch_api.downloadTwitchChatByVODID(example_vod, 'sample', null, null, null, './test', fakeCLI(calls, 'VOD not found'));
+            assert(calls.length === 1);
+            assert(chat === null);
+            assert(!fs.existsSync(sample_path));
+        });
+
+        it('Download VOD chat - rejects VOD IDs that are not alphanumeric', async function() {
+            const calls = [];
+            const chat = await twitch_api.downloadTwitchChatByVODID('123; echo injected', 'sample', null, null, null, './test', fakeCLI(calls));
+            assert(calls.length === 0);
+            assert(chat === null);
+            assert(!fs.existsSync(sample_path));
+        });
     });
 });
 

@@ -556,7 +556,7 @@ exports.generateArgs = async (url, type, options, user_uid = null, simulated = f
     return downloadConfig;
 }
 
-exports.getVideoInfoByURL = async (url, args = [], download_uid = null) => {
+exports.getVideoInfoByURL = async (url, args = [], download_uid = null, customInfoHandler = null) => {
     // remove bad args
     const temp_args = utils.filterArgs(args, ['--no-simulate']);
     const new_args = [...temp_args];
@@ -568,7 +568,7 @@ exports.getVideoInfoByURL = async (url, args = [], download_uid = null) => {
 
     new_args.push('--dump-json');
 
-    let {callback} = await youtubedl_api.runYoutubeDL(url, new_args);
+    let {callback} = await youtubedl_api.runYoutubeDL(url, new_args, customInfoHandler);
     const {parsed_output, err} = await callback;
     if (!parsed_output || parsed_output.length === 0) {
         let error_message = `Error while retrieving info on video with URL ${url} with the following message: ${err}`;

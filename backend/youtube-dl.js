@@ -27,13 +27,14 @@ exports.youtubedl_forks = {
 }
 
 exports.runYoutubeDL = async (url, args, customDownloadHandler = null) => {
-    const output_file_path = getYoutubeDLPath();
-    if (!fs.existsSync(output_file_path)) await exports.checkForYoutubeDLUpdate();
     let callback = null;
     let child_process = null;
     if (customDownloadHandler) {
         callback = runYoutubeDLCustom(url, args, customDownloadHandler);
     } else {
+        // the binary is only needed when we actually spawn it
+        const output_file_path = getYoutubeDLPath();
+        if (!fs.existsSync(output_file_path)) await exports.checkForYoutubeDLUpdate();
         ({callback, child_process} = await runYoutubeDLProcess(url, args));
     }
 

@@ -1,0 +1,19 @@
+{
+  "comments": [
+    {
+      "content_offset_seconds": 5,
+      "commenter": { "name": "sample_viewer_one" },
+      "message": { "body": "hello chat", "user_color": "#FF69B4" }
+    },
+    {
+      "content_offset_seconds": 65.5,
+      "commenter": { "name": "sample_viewer_two" },
+      "message": { "body": "second message", "user_color": null }
+    },
+    {
+      "content_offset_seconds": 3725,
+      "commenter": { "name": "sample_viewer_one" },
+      "message": { "body": "an hour in", "user_color": "#FF69B4" }
+    }
+  ]
+}
