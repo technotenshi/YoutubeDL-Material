@@ -11,6 +11,9 @@ on:
 
 jobs:
   build-and-push:
+    # Fork publishing disabled: only the upstream repo may push images.
+    # Remove this condition (and configure DOCKERHUB_* secrets) to re-enable.
+    if: github.repository == 'Tzahi12345/YoutubeDL-Material'
     runs-on: ubuntu-latest
 
     steps:
@@ -27,7 +30,7 @@ jobs:
 
       - name: create-json
         id: create-json
-        uses: jsdaniell/create-json@v1.2.2
+        uses: jsdaniell/create-json@v1.2.3
         with:
           name: "version.json"
           json: '{"type": "docker", "tag": "latest", "commit": "${{ steps.vars.outputs.sha_short }}", "date": "${{ steps.date.outputs.date }}"}'
@@ -76,7 +79,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: build & push images
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
