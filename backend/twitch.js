@@ -8,9 +8,7 @@ const { promisify } = require('util');
 const child_process = require('child_process');
 const commandExistsSync = require('command-exists').sync;
 
-async function getCommentsForVOD(vodId) {
-    const exec = promisify(child_process.exec);
-    
+async function getCommentsForVOD(vodId, customCLIRunner = null) {
     // Reject invalid params to prevent command injection attack
     if (!vodId.match(/^[0-9a-z]+$/)) {
         logger.error('VOD ID must be purely alphanumeric. Twitch chat download failed!');
@@ -21,12 +19,14 @@ async function getCommentsForVOD(vodId) {
     const cliExt = is_windows ? '.exe' : ''
     const cliPath = `TwitchDownloaderCLI${cliExt}`
 
-    if (!commandExistsSync(cliPath)) {
+    // a custom runner stands in for the CLI (tests), so the real binary is not required
+    if (!customCLIRunner && !commandExistsSync(cliPath)) {
         logger.error(`${cliPath} does not exist. Twitch chat download failed! Get it here: https://github.com/lay295/TwitchDownloader`);
         return null;
     }
 
-    const result = await exec(`${cliPath} chatdownload -u ${vodId} -o appdata/${vodId}.json`, {stdio:[0,1,2]});
+    const runCLI = customCLIRunner || promisify(child_process.exec);
+    const result = await runCLI(`${cliPath} chatdownload -u ${vodId} -o appdata/${vodId}.json`, {stdio:[0,1,2]});
 
     if (result['stderr']) {
         logger.error(`Failed to download twitch comments for ${vodId}`);
@@ -80,10 +80,10 @@ async function getTwitchChatByFileID(id, type, user_uid, uuid, sub) {
     return chat_file;
 }
 
-async function downloadTwitchChatByVODID(vodId, id, type, user_uid, sub, customFileFolderPath = null) {
+async function downloadTwitchChatByVODID(vodId, id, type, user_uid, sub, customFileFolderPath = null, customCLIRunner = null) {
     const usersFileFolder           = config_api.getConfigItem('ytdl_users_base_path');
     const subscriptionsFileFolder   = config_api.getConfigItem('ytdl_subscriptions_base_path');
-    const chat = await getCommentsForVOD(vodId);
+    const chat = await getCommentsForVOD(vodId, customCLIRunner);
 
     // save file if needed params are included
     let file_path = null;

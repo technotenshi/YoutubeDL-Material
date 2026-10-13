@@ -1,0 +1,31 @@
+name: Live checks
+'on':
+  schedule:
+    - cron: '23 7 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Informational only: these call real YouTube, Twitch and GitHub release endpoints and can fail
+# for reasons outside this repo (bot checks, expired VODs). Never runs on pull requests and does
+# not gate merges or publishing. The deterministic suite is mocha.yml.
+jobs:
+  live:
+    name: Backend - live network checks
+    runs-on: ubuntu-22.04
+    continue-on-error: true
+    timeout-minutes: 30
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '16'
+      - uses: actions/checkout@v4
+      - name: Install TwitchDownloaderCLI
+        run: sudo sh docker-utils/fetch-twitchdownloader.sh
+      - name: Install Dependencies
+        run: npm ci
+        working-directory: ./backend
+      - name: Run live checks
+        run: npm run test:live
+        working-directory: ./backend
