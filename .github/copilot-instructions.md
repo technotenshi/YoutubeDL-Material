@@ -4,7 +4,7 @@ Read `AGENTS.md` first. It covers the code map, commands, and working agreements
 
 ## Fork ground rules
 
-- This repository is a fork of `Tzahi12345/YoutubeDL-Material`. It publishes no Docker image and no release package for now.
+- This fork publishes no Docker image and no release package for now.
 - There is no supported standalone `docker-compose.yml`. The file in the repository root builds from the local `Dockerfile` and only works inside a clone. Do not ask for a published image reference or for the compose file to be released on its own.
 - Upstream attribution is preserved on purpose. Links to `Tzahi12345/YoutubeDL-Material` are intentional where attribution requires them. Do not ask to repoint or remove them without a stated reason.
 
