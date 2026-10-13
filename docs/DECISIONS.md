@@ -31,3 +31,10 @@ Documentation for the compatibility option: [npm ci](https://github.com/npm/cli/
 - Mocha stays informational, not a required status check. The job name `Backend - mocha (16)` is unchanged.
 - Verified by running the full suite on Node 16.20.2 with all network denied through macOS `sandbox-exec` and no yt-dlp binary present: 66 passing, 0 failing. The live YouTube and binary checks were run once with network and passed. The live Twitch check was not run, because TwitchDownloaderCLI is not available for this host; the GitHub runner installs it.
 - Follow-up on PR #38: the mocha job failed before running any test, in the archived `FedericoCarboni/setup-ffmpeg@v3` step ("Failed to read version from readme"). The same step failed on `main` and on every earlier run, so the tests had never reached CI. `mocha.yml` now installs ffmpeg from the runner's apt packages instead. The job name is unchanged.
+
+## 2026-10-13 Add repo-wide Copilot instructions (#27)
+
+- Added `.github/copilot-instructions.md`, the file GitHub reads for repository-wide Copilot instructions. Copilot reads it from the pull request head branch, so changes to it can be tested in their own PR.
+- It holds only what `AGENTS.md` lacks: no published image or standalone compose file, intentional upstream links, generated files and runtime data are not reviewed as source, and docs and workflow claims are checked against the current head before commenting.
+- Length: GitHub removed the 4000 character cap on custom instructions for Copilot code review (changelog, 2026-06-12). The file is about 1.4 KB and points to `AGENTS.md` for everything else.
+- Pending: after merge, a Copilot review of a small docs PR must not repeat the PR #25 claims. Record the result on #27.
