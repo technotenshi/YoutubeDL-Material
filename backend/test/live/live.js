@@ -58,21 +58,32 @@ describe('Live - youtube-dl binary', function() {
     it('Update youtube-dl', async function() {
         const original_fork = config_api.getConfigItem('ytdl_default_downloader');
         const binary_path = path.join('test', 'test_binary');
-        for (const youtubedl_fork in youtubedl_api.youtubedl_forks) {
-            config_api.setConfigItem('ytdl_default_downloader', youtubedl_fork);
-            const latest_version = await youtubedl_api.checkForYoutubeDLUpdate();
-            await youtubedl_api.updateYoutubeDL(latest_version, binary_path);
-            assert(fs.existsSync(binary_path));
-            if (fs.existsSync(binary_path)) fs.unlinkSync(binary_path);
+        try {
+            for (const youtubedl_fork in youtubedl_api.youtubedl_forks) {
+                config_api.setConfigItem('ytdl_default_downloader', youtubedl_fork);
+                const latest_version = await youtubedl_api.getLatestUpdateVersion(youtubedl_fork);
+                assert(latest_version);
+                await youtubedl_api.updateYoutubeDL(latest_version, binary_path);
+                assert(fs.existsSync(binary_path));
+                // the version we asked for is what gets recorded for this fork
+                const details = fs.readJSONSync(CONSTS.DETAILS_BIN_PATH);
+                assert(details[youtubedl_fork]['version'] === latest_version);
+                if (fs.existsSync(binary_path)) fs.unlinkSync(binary_path);
+            }
+        } finally {
+            config_api.setConfigItem('ytdl_default_downloader', original_fork);
         }
-        config_api.setConfigItem('ytdl_default_downloader', original_fork);
     });
 
     it('Run process', async function() {
         const url = 'https://www.youtube.com/watch?v=jNQXAC9IVRw';
         const args = await downloader_api.generateArgs(url, 'video', {}, null, true);
-        const {child_process} = await youtubedl_api.runYoutubeDL(url, args);
+        const {child_process, callback} = await youtubedl_api.runYoutubeDL(url, [...args, '--dump-json']);
         assert(child_process);
+        // wait for yt-dlp to finish so the process is not left running after the test
+        const {parsed_output} = await callback;
+        assert(!!parsed_output && parsed_output.length > 0);
+        assert(parsed_output[0]['id'] === 'jNQXAC9IVRw');
     });
 });
 
