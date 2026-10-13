@@ -36,5 +36,6 @@ Documentation for the compatibility option: [npm ci](https://github.com/npm/cli/
 
 - Added `.github/copilot-instructions.md`, the file GitHub reads for repository-wide Copilot instructions. Copilot reads it from the pull request head branch, so changes to it can be tested in their own PR.
 - It holds the ground rules that Copilot's review comments on PR #25 got wrong or stale (a standalone compose install and stale README text), and points to `AGENTS.md` for everything else. See the file for the rules.
+- Codex and the standards reviewer both flagged that restating the upstream attribution and commit exclusion rules from `AGENTS.md` breaks the no duplication goal. The file now keeps only the review framing (links to upstream are intentional, skip generated files and runtime data) and issue #27's acceptance criteria were amended to match.
 - Length: GitHub removed the 4000 character cap on custom instructions for Copilot code review (changelog, 2026-06-12). The file is about 1.4 KB.
 - Pending: after merge, a Copilot review of a small docs PR must not repeat the PR #25 claims. Record the result on #27.

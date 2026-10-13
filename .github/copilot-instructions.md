@@ -1,18 +1,16 @@
 # Copilot instructions
 
-Read `AGENTS.md` first. It covers the code map, commands, and working agreements. This file adds only the ground rules that `AGENTS.md` does not state.
+Read `AGENTS.md` first. It covers the code map, commands, fork context, and working agreements. This file adds only review guidance that `AGENTS.md` does not state.
 
 ## Fork ground rules
 
 - This fork publishes no Docker image and no release package for now.
 - There is no supported standalone `docker-compose.yml`. The file in the repository root builds from the local `Dockerfile` and only works inside a clone. Do not ask for a published image reference or for the compose file to be released on its own.
-- Upstream attribution is preserved on purpose. Links to `Tzahi12345/YoutubeDL-Material` are intentional where attribution requires them. Do not ask to repoint or remove them without a stated reason.
+- Links to upstream are intentional. Do not ask to repoint or remove them without a stated reason.
 
 ## Do not review as source
 
-- Generated files: translation JSON produced by `src/postbuild.mjs`, and built frontend output in `backend/public/`.
-- Runtime data: databases, cookies, downloaded media, and logs.
-- Flag any change that commits generated files or runtime data. They must never be committed.
+Skip generated files (translation JSON from `src/postbuild.mjs`, built frontend output) and runtime data when reviewing code. `AGENTS.md` says they stay out of commits, so flag any change that adds them instead of commenting on their contents.
 
 ## Verify before commenting
 
