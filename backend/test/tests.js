@@ -447,7 +447,7 @@ describe('Downloader', function() {
         ui_uid: uuid()
     }
 
-    // Recorded yt-dlp output (see test/fixtures/ytdlp/README.md). Keeps this suite offline.
+    // Recorded yt-dlp output (see test/fixtures/README.md). Keeps this suite offline.
     const video_info_fixture = fs.readJSONSync(path.join(__dirname, 'fixtures', 'ytdlp', 'video.info.json'));
     const playlist_info_fixture = fs.readJSONSync(path.join(__dirname, 'fixtures', 'ytdlp', 'playlist.info.json'));
 

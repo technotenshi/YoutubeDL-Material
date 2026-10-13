@@ -11,7 +11,7 @@ Recorded output of `getVideoInfoByURL` (yt-dlp `--dump-json`), one array element
 - Video: https://www.youtube.com/watch?v=jNQXAC9IVRw
 - Playlist: https://www.youtube.com/playlist?list=PLbZT16X07RLhqK-ZgSkRuUyiz9B_WLdNK (2 entries, the first two available when captured)
 
-Trimmed after capture to keep the files small and free of expiring signed URLs. Removed top-level keys: `requested_formats`, `thumbnails`, `automatic_captions`, `subtitles`, `requested_subtitles`, `heatmap`, `chapters`, `_format_sort_fields`. In `formats`, only the entries named by `format_id` remain, without `url`, `manifest_url`, `fragment_base_url`, `fragments`, `http_headers`, `downloader_options`. Everything else is as yt-dlp emitted it. The app reads `format_id`, `formats[].filesize`, `title`, `_filename`, `webpage_url` and the other kept fields.
+Trimmed after capture to keep the files small and free of expiring signed URLs. Removed top-level keys: `requested_formats`, `thumbnails`, `automatic_captions`, `subtitles`, `requested_subtitles`, `heatmap`, `chapters`, `_format_sort_fields`. In `formats`, only the entries named by `format_id` remain, without `url`, `manifest_url`, `fragment_base_url`, `fragments`, `http_headers`, `downloader_options`. Everything else is as yt-dlp emitted it, including the `description` of the video, which is unrelated to the video itself because the uploader set it that way. The app reads `format_id`, `formats[].filesize`, `title`, `_filename`, `webpage_url` and the other kept fields.
 
 To refresh: run `getVideoInfoByURL` for each URL against current yt-dlp, trim as above, and update the version and date here.
 
