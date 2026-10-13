@@ -31,3 +31,18 @@ Documentation for the compatibility option: [npm ci](https://github.com/npm/cli/
 - Mocha stays informational, not a required status check. The job name `Backend - mocha (16)` is unchanged.
 - Verified by running the full suite on Node 16.20.2 with all network denied through macOS `sandbox-exec` and no yt-dlp binary present: 66 passing, 0 failing. The live YouTube and binary checks were run once with network and passed. The live Twitch check was not run, because TwitchDownloaderCLI is not available for this host; the GitHub runner installs it.
 - Follow-up on PR #38: the mocha job failed before running any test, in the archived `FedericoCarboni/setup-ffmpeg@v3` step ("Failed to read version from readme"). The same step failed on `main` and on every earlier run, so the tests had never reached CI. `mocha.yml` now installs ffmpeg from the runner's apt packages instead. The job name is unchanged.
+
+## 2026-10-12 Add repo-wide Copilot instructions (#27)
+
+- Added `.github/copilot-instructions.md`, the file GitHub reads for repository-wide Copilot instructions. Copilot reads it from the pull request head branch, so changes to it can be tested in their own PR.
+- It holds the ground rules that Copilot's review comments on PR #25 got wrong or stale (a standalone compose install and stale README text), and points to `AGENTS.md` for everything else. See the file for the rules.
+- Codex and the standards reviewer both flagged that restating the upstream attribution and commit exclusion rules from `AGENTS.md` breaks the no duplication goal. The file now keeps only the review framing (links to upstream are intentional, skip generated files and runtime data) and issue #27's acceptance criteria were amended to match.
+- Length: GitHub removed the 4000 character cap on custom instructions for Copilot code review (changelog, 2026-06-12), so file size is not a constraint.
+- Pending: the Copilot review on the PR that adds this file must not repeat the PR #25 claims. Copilot reads the instructions from the head branch, so this is checked before merge. Record the result on #27.
+
+## 2026-10-12 Build workflow runs only for app build inputs
+
+- `.github/workflows/build.yml` (the app build, check name `continuous integration / build`) now runs only when `src/`, `backend/`, the root package files, `angular.json`, `tsconfig.json`, `.browserslistrc`, or the workflow itself change. Docs and other workflow only changes skip it.
+- Dropped the `feat/*` push trigger. It ran the build twice for a PR from a `feat/*` branch, once for the push and once for `pull_request`. Pushes to `main` and `v*` tags still build; path filters are not evaluated for tag pushes, so releases always build.
+- No ruleset requires this check, so a skipped run cannot block a merge. If it becomes a required check, a skipped path filtered workflow stays pending and blocks merging.
+- `docker-pr.yml` already had its own path filter for the Docker image build. `mocha.yml` and the security workflows still run on every PR.
