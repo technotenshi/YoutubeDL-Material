@@ -4,7 +4,7 @@
 # and also optimizing some code with this commit.
 # xoxo :D
 
-set -u
+set -eu
 
 # The release version and per architecture sha256 are pinned in twitchdownloader.env.
 # shellcheck source=/dev/null
@@ -17,13 +17,7 @@ case $(uname -m) in
   aarch64)
     ARCH=LinuxArm64
     SHA256=$TWITCHDOWNLOADER_SHA256_LINUX_ARM64;;
-  armhf)
-    ARCH=LinuxArm
-    SHA256=$TWITCHDOWNLOADER_SHA256_LINUX_ARM;;
-  armv7)
-    ARCH=LinuxArm
-    SHA256=$TWITCHDOWNLOADER_SHA256_LINUX_ARM;;
-  armv7l)
+  armhf|armv7|armv7l)
     ARCH=LinuxArm
     SHA256=$TWITCHDOWNLOADER_SHA256_LINUX_ARM;;
   *)
@@ -43,11 +37,13 @@ curl -o twitchdownloader.zip \
     --retry 5 \
     --retry-delay 0 \
     --retry-max-time 40 \
-    -L "https://github.com/lay295/TwitchDownloader/releases/download/$VERSION/TwitchDownloaderCLI-$VERSION-$ARCH.zip" || exit 1
+    -L "https://github.com/lay295/TwitchDownloader/releases/download/$VERSION/TwitchDownloaderCLI-$VERSION-$ARCH.zip"
 echo "(3/5) VERIFY - Check the download against the pinned sha256"
-echo "$SHA256  twitchdownloader.zip" | sha256sum -c - || exit 1
-unzip twitchdownloader.zip || exit 1
+echo "$SHA256  twitchdownloader.zip" | sha256sum -c -
+unzip twitchdownloader.zip
 chmod +x TwitchDownloaderCLI
 echo "(4/5) Smoke test"
-./TwitchDownloaderCLI --help
+# The CLI exits 1 for --help and version, so check the version it reports instead of its exit code
+./TwitchDownloaderCLI version 2>&1 | grep -q "^TwitchDownloaderCLI $VERSION"
+echo "(5/5) PROVISION - Install into /usr/local/bin"
 cp ./TwitchDownloaderCLI /usr/local/bin/TwitchDownloaderCLI

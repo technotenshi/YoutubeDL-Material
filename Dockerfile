@@ -17,7 +17,7 @@ RUN sh ./fetch-twitchdownloader.sh
 FROM node:${NODE_VERSION}-slim AS node
 
 
-# Create our Ubuntu 22.04 with node 16.14.2
+# Create our Ubuntu 22.04 with node
 # Go to 20.04
 FROM ubuntu:22.04 AS base
 ARG TARGETPLATFORM
