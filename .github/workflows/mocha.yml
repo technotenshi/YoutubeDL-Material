@@ -9,6 +9,9 @@ name: Tests
       - synchronize
       - reopened
 
+permissions:
+  contents: read
+
 jobs:
   test:
     name: 'Backend - mocha'

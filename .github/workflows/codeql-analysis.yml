@@ -14,10 +14,17 @@ on:
   schedule:
     - cron: '0 12 * * 6'
 
+permissions:
+  contents: read
+
 jobs:
   analyze:
     name: Analyze
     runs-on: ubuntu-latest
+    # security-events: upload SARIF results to code scanning.
+    permissions:
+      contents: read
+      security-events: write
 
     strategy:
       fail-fast: false
