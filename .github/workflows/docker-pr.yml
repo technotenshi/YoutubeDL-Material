@@ -18,6 +18,9 @@ on:
       - backend/fix-scripts/**
       - .github/workflows/docker-pr.yml
 
+permissions:
+  contents: read
+
 jobs:
   build-image:
     runs-on: ubuntu-latest

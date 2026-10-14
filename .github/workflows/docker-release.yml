@@ -9,12 +9,19 @@ on:
   release:
     types: [published]
 
+permissions:
+  contents: read
+
 jobs:
   build-and-push:
     # Fork publishing disabled: only the upstream repo may push images.
     # Remove this condition (and configure DOCKERHUB_* secrets) to re-enable.
     if: github.repository == 'Tzahi12345/YoutubeDL-Material'
     runs-on: ubuntu-latest
+    # packages: write is needed to push images to ghcr.io.
+    permissions:
+      contents: read
+      packages: write
 
     steps:
       - name: checkout code
