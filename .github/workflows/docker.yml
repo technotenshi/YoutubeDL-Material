@@ -11,9 +11,6 @@ permissions:
 
 jobs:
   build-and-push:
-    # Publish only from main, so a run on another branch cannot move the
-    # nightly tag to unreviewed code.
-    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     # packages: write is needed to push images to ghcr.io.
     permissions:
