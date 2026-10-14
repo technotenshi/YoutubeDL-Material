@@ -38,7 +38,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: setup node
         uses: actions/setup-node@v4
         with:
@@ -93,7 +93,7 @@ jobs:
       contents: write
     steps:
       - name: checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: create release
         id: create_release
         uses: actions/create-release@v1

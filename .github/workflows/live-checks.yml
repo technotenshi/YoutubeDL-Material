@@ -20,7 +20,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '16'
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install TwitchDownloaderCLI
         run: sudo sh docker-utils/fetch-twitchdownloader.sh
       - name: Install Dependencies
