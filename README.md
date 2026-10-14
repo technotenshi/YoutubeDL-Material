@@ -96,7 +96,7 @@ If you're on a Synology NAS, unRAID, Raspberry Pi 4 or any other possible specia
 
 If you are looking to setup YoutubeDL-Material with Docker, this section is for you.
 
-This fork does not publish a Docker image or a standalone `docker-compose.yml` for now. Docker runs by building the image from a clone of this repository, so the `docker-compose.yml` in the repository root only works next to the rest of the source (it builds from the included `Dockerfile`).
+This fork has no released or supported Docker image and no standalone `docker-compose.yml` for now. A manual workflow run pushes a development build to `ghcr.io/technotenshi/youtubedl-material` (tags `nightly` and `sha-<commit>`). It is not a release, it can change at any time, and the steps below do not use it. Docker runs by building the image from a clone of this repository, so the `docker-compose.yml` in the repository root only works next to the rest of the source (it builds from the included `Dockerfile`).
 
 1. Clone the repository and change into it: `git clone https://github.com/technotenshi/YoutubeDL-Material.git`, then `cd YoutubeDL-Material`.
 2. Run `docker compose up --build`. This builds the image from the `Dockerfile` and starts the app together with its MongoDB container. The first build can take a while.

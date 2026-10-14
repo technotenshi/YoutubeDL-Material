@@ -4,7 +4,7 @@ Read `AGENTS.md` first. It covers the code map, commands, fork context, and work
 
 ## Fork ground rules
 
-- This fork publishes no Docker image and no release package for now.
+- This fork has no release package and no supported Docker image for now. A manual workflow run pushes a development build (`nightly` and `sha-<commit>` tags) to the fork's ghcr namespace (#19). That package is public. The README says it is not a release.
 - There is no supported standalone `docker-compose.yml`. The file in the repository root builds from the local `Dockerfile` and only works inside a clone. Do not ask for a published image reference or for the compose file to be released on its own.
 - Links to upstream are intentional. Do not ask to repoint or remove them without a stated reason.
 
