@@ -3,7 +3,7 @@
 ARG NODE_VERSION=16.14.2
 
 # Fetching our utils
-FROM ubuntu:22.04 AS utils
+FROM ubuntu:22.10 AS utils
 ENV DEBIAN_FRONTEND=noninteractive
 # Use script due local build compability
 # twitchdownloader.env pins the TwitchDownloaderCLI version and its sha256 per architecture
@@ -19,7 +19,7 @@ FROM node:${NODE_VERSION}-slim AS node
 
 # Create our Ubuntu 22.04 with node
 # Go to 20.04
-FROM ubuntu:22.04 AS base
+FROM ubuntu:22.10 AS base
 ARG TARGETPLATFORM
 ARG DEBIAN_FRONTEND=noninteractive
 ARG NODE_VERSION
