@@ -14,7 +14,7 @@ For library, framework, SDK, API, CLI, or cloud-service questions, use Context7 
 
 ## Fork context
 
-- This repository is a fork of `Tzahi12345/YoutubeDL-Material`; the configured `origin` is `technotenshi/YoutubeDL-Material`. The `upstream` remote (`https://github.com/Tzahi12345/YoutubeDL-Material.git`) tracks the original project's `master` only, with no tags; if a clone lacks it, add it with `git remote add -t master upstream <url>`. Check actual remotes before Git operations, and pass `--repo technotenshi/YoutubeDL-Material` to `gh` if its default repo is not the fork.
+- This repository is a fork of `Tzahi12345/YoutubeDL-Material`; the configured `origin` is `technotenshi/YoutubeDL-Material`. The `upstream` remote (`https://github.com/Tzahi12345/YoutubeDL-Material.git`) tracks the original project's `master` only, with no tags; if a clone lacks it, add it with `git remote add --no-tags -t master upstream <url>`. Check actual remotes before Git operations, and pass `--repo technotenshi/YoutubeDL-Material` to `gh` if its default repo is not the fork.
 - Upstream URLs remain in release updating, README links, and container configuration. Preserve attribution and review these references when implementing fork-specific release behavior.
 - The in-app updater in `backend/app.js` downloads upstream releases and replaces application files. Account for that behavior when maintaining fork changes.
 
