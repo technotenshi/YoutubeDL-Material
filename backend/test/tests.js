@@ -776,6 +776,227 @@ describe('Subscriptions', function() {
     });
 });
 
+// A stub yt-dlp (a POSIX shell script in appdata/bin) prints canned output and exits with a chosen status,
+// so the real process, parsing and queue code runs offline. yt-dlp exits 1 whenever any video in a playlist
+// is private, removed or terminated, even though it still prints every other entry.
+(process.platform === 'win32' ? describe.skip : describe)('Subscription checks when yt-dlp exits non-zero', function() {
+    // longer than waitFor's limit, so a timeout reports what it was waiting for and the log
+    this.timeout(10000);
+    const os = require('os');
+    const app_logger = require('../logger');
+    const playlist_entries = require('./fixtures/ytdlp/playlist.info.json')
+        .map(entry => Object.assign({}, entry, {playlist_title: 'Test playlist'}));
+    // a signed media URL like the ones yt-dlp prints, which must never reach the log
+    playlist_entries[0].url = 'https://rr1.googlevideo.com/videoplayback?sig=SIGNED-SECRET';
+    const unavailable_error = 'ERROR: [youtube] unavail1: Private video. Sign in if you\'ve been granted access to this video';
+
+    const binary_path = path.join('appdata', 'bin', 'yt-dlp');
+    let work_dir = null;
+    let saved = null;
+    let log_lines = null;
+
+    const sub = () => ({
+        name: 'check_sub',
+        url: 'https://www.youtube.com/playlist?list=PLtest',
+        isPlaylist: true,
+        maxQuality: null,
+        id: uuid(),
+        user_uid: null,
+        type: 'video',
+        paused: true
+    });
+
+    const stubYoutubeDL = ({entries = [], stdout_text = '', stderr = '', exit_code = 0, killed_by_signal = false}) => {
+        const stdout_path = path.join(work_dir, 'stdout.txt');
+        const stderr_path = path.join(work_dir, 'stderr.txt');
+        fs.writeFileSync(stdout_path, entries.map(entry => JSON.stringify(entry) + '\n').join('') + stdout_text);
+        fs.writeFileSync(stderr_path, stderr);
+        const end = killed_by_signal ? 'kill -9 $$' : `exit ${exit_code}`;
+        fs.ensureDirSync(path.dirname(binary_path));
+        fs.writeFileSync(binary_path, `#!/bin/sh\ncat '${stdout_path}'\ncat '${stderr_path}' >&2\n${end}\n`, {mode: 0o755});
+    };
+
+    const waitFor = async (what, condition, timeout_ms = 5000) => {
+        const deadline = Date.now() + timeout_ms;
+        while (Date.now() < deadline) {
+            const value = await condition();
+            if (value) return value;
+            await new Promise(resolve => setTimeout(resolve, 20));
+        }
+        assert.fail(`Timed out waiting for ${what}. Log:\n${log_lines.join('\n')}`);
+    };
+
+    const queuedUrls = async () => (await db_api.getRecords('download_queue')).map(download => download['url']).sort();
+    const waitForQueue = (count) => waitFor(`${count} queued downloads`, async () => (await queuedUrls()).length >= count);
+    const waitForFailedCheck = () => waitFor('the check to fail', () => log_lines.some(line => line.includes('Subscription check failed')));
+    // nothing else runs after the failure is logged, but give the queue a moment to prove it stays empty
+    const settle = () => new Promise(resolve => setTimeout(resolve, 100));
+    const logged = (level) => log_lines.filter(line => line.startsWith(`${level}: `));
+
+    before(function() {
+        work_dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ytdl-sub-'));
+        saved = {
+            fork: config_api.getConfigItem('ytdl_default_downloader'),
+            binary: fs.existsSync(binary_path) ? fs.readFileSync(binary_path) : null,
+            logger_methods: {warn: app_logger.warn, error: app_logger.error, info: app_logger.info, verbose: app_logger.verbose}
+        };
+        config_api.setConfigItem('ytdl_default_downloader', 'yt-dlp');
+    });
+
+    beforeEach(async function() {
+        await db_api.removeAllRecords('subscriptions');
+        await db_api.removeAllRecords('download_queue');
+        await db_api.removeAllRecords('archives');
+        log_lines = [];
+        for (const level of ['warn', 'error', 'info', 'verbose']) {
+            // an Error is logged by its message, which is how winston prints it
+            app_logger[level] = (message) => { log_lines.push(`${level}: ${message instanceof Error ? message.message : message}`); };
+        }
+    });
+
+    afterEach(function() {
+        Object.assign(app_logger, saved.logger_methods);
+    });
+
+    after(async function() {
+        if (!saved) return;
+        config_api.setConfigItem('ytdl_default_downloader', saved.fork);
+        if (saved.binary) fs.writeFileSync(binary_path, saved.binary, {mode: 0o755});
+        else fs.removeSync(binary_path);
+        await db_api.removeAllRecords('subscriptions');
+        await db_api.removeAllRecords('download_queue');
+        fs.removeSync(work_dir);
+    });
+
+    describe('Checking for new videos', function() {
+        it('Continues with the entries yt-dlp printed and says so in the log', async function() {
+            const check_sub = sub();
+            await subscriptions_api.subscribe(check_sub, null, true);
+            stubYoutubeDL({entries: playlist_entries, stderr: unavailable_error + '\n', exit_code: 1});
+
+            await subscriptions_api.getVideosForSub(check_sub.id);
+
+            await waitForQueue(2);
+            assert.deepStrictEqual(await queuedUrls(), playlist_entries.map(entry => entry['webpage_url']).sort());
+            const warnings = logged('warn');
+            assert.strictEqual(warnings.length, 1, warnings.join('\n'));
+            for (const detail of ['2 entries', 'reported errors', 'code 1']) assert(warnings[0].includes(detail), warnings[0]);
+        });
+
+        it('Does not log the output of yt-dlp when it continues', async function() {
+            const check_sub = sub();
+            await subscriptions_api.subscribe(check_sub, null, true);
+            stubYoutubeDL({entries: playlist_entries, stderr: unavailable_error + '\n', exit_code: 1});
+
+            await subscriptions_api.getVideosForSub(check_sub.id);
+
+            await waitForQueue(2);
+            await settle();
+            for (const line of log_lines) {
+                for (const output of ['SIGNED-SECRET', playlist_entries[0]['title'], unavailable_error]) {
+                    assert(!line.includes(output), line);
+                }
+            }
+        });
+
+        it('Does not queue or archive the videos yt-dlp reported as unavailable', async function() {
+            const check_sub = sub();
+            await subscriptions_api.subscribe(check_sub, null, true);
+            stubYoutubeDL({entries: playlist_entries, stderr: unavailable_error + '\n', exit_code: 1});
+
+            await subscriptions_api.getVideosForSub(check_sub.id);
+
+            await waitForQueue(2);
+            await settle();
+            const urls = await queuedUrls();
+            assert.strictEqual(urls.length, 2, urls.join(', '));
+            assert(!urls.some(url => url.includes('unavail1')), urls.join(', '));
+            assert(!(await archive_api.existsInArchive('youtube', 'unavail1', 'video', null, check_sub.id)));
+            assert.strictEqual((await db_api.getRecords('files', {sub_id: check_sub.id})).length, 0);
+        });
+
+        it('Fails when yt-dlp exits non-zero and printed nothing usable, naming the exit code and a trimmed stderr', async function() {
+            const check_sub = sub();
+            await subscriptions_api.subscribe(check_sub, null, true);
+            const noise = Array.from({length: 30}, (_, i) => `WARNING: [youtube] noise line ${i + 1}`);
+            const stderr = [...noise, unavailable_error].join('\n') + '\n';
+            stubYoutubeDL({stdout_text: 'a line that is not json SIGNED-SECRET\n', stderr: stderr, exit_code: 1});
+
+            await subscriptions_api.getVideosForSub(check_sub.id);
+
+            await waitForFailedCheck();
+            await settle();
+            assert.deepStrictEqual(await queuedUrls(), []);
+            const errors = logged('error').join('\n');
+            assert(errors.includes('code 1'), errors);
+            assert(errors.includes('Private video'), errors);
+            assert(!/noise line 1(\D|$)/.test(errors), errors);
+            assert(!errors.includes('SIGNED-SECRET'), errors);
+        });
+
+        it('Fails when yt-dlp is killed after printing entries, so a cancelled check queues nothing', async function() {
+            const check_sub = sub();
+            await subscriptions_api.subscribe(check_sub, null, true);
+            stubYoutubeDL({entries: playlist_entries, killed_by_signal: true});
+
+            await subscriptions_api.getVideosForSub(check_sub.id);
+
+            await waitForFailedCheck();
+            await settle();
+            assert.deepStrictEqual(await queuedUrls(), []);
+        });
+
+        it('Treats a clean exit as before: queues every entry and logs no errors', async function() {
+            const check_sub = sub();
+            await subscriptions_api.subscribe(check_sub, null, true);
+            stubYoutubeDL({entries: playlist_entries, stderr: 'WARNING: [youtube] No supported JavaScript runtime could be found.\n', exit_code: 0});
+
+            await subscriptions_api.getVideosForSub(check_sub.id);
+
+            await waitForQueue(2);
+            await settle();
+            assert.deepStrictEqual(await queuedUrls(), playlist_entries.map(entry => entry['webpage_url']).sort());
+            assert.deepStrictEqual(logged('warn'), []);
+            assert.deepStrictEqual(logged('error'), []);
+        });
+    });
+
+    describe('Adding a subscription', function() {
+        // the app asks for the first entry only (--playlist-end 1) to learn the name
+        const unnamed_sub = () => Object.assign(sub(), {name: undefined});
+
+        it('Succeeds when yt-dlp exits non-zero after printing an entry', async function() {
+            const new_sub = unnamed_sub();
+            stubYoutubeDL({entries: playlist_entries.slice(0, 1), stderr: unavailable_error + '\n', exit_code: 1});
+
+            const result = await subscriptions_api.subscribe(new_sub, null);
+
+            assert.strictEqual(result['success'], true, log_lines.join('\n'));
+            assert.strictEqual((await db_api.getRecord('subscriptions', {id: new_sub.id}))['name'], 'Test playlist');
+        });
+
+        it('Succeeds when yt-dlp exits cleanly but warns on stderr', async function() {
+            const new_sub = unnamed_sub();
+            stubYoutubeDL({entries: playlist_entries.slice(0, 1), stderr: 'WARNING: [youtube] No supported JavaScript runtime could be found.\n', exit_code: 0});
+
+            const result = await subscriptions_api.subscribe(new_sub, null);
+
+            assert.strictEqual(result['success'], true, log_lines.join('\n'));
+        });
+
+        it('Fails when yt-dlp exits non-zero and printed nothing usable', async function() {
+            const new_sub = unnamed_sub();
+            stubYoutubeDL({stderr: unavailable_error + '\n', exit_code: 1});
+
+            const result = await subscriptions_api.subscribe(new_sub, null);
+
+            assert.strictEqual(result['success'], false);
+            const errors = logged('error').join('\n');
+            assert(errors.includes('code 1') && errors.includes('Private video'), errors);
+        });
+    });
+});
+
 describe('Tasks', function() {
     const tasks_api = require('../tasks');
     beforeEach(async function() {
