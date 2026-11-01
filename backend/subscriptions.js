@@ -615,14 +615,21 @@ function getEntriesPrintedBeforeFailure(err) {
     return entries;
 }
 
+// The last lines of yt-dlp's standard error, each cut short, for the log. Standard error can be long and hold signed media URLs.
+function summarizeStderr(stderr) {
+    const lines = (typeof stderr === 'string' ? stderr : '').split(/\r?\n/).filter(line => line.trim());
+    return lines.slice(-5).map(line => line.slice(0, 300)).join('\n');
+}
+
 // A short description of a failed run for the log: the exit code and the end of stderr. Not stdout, which
-// holds the entries, and not the whole of stderr, which can be long and hold signed media URLs.
+// holds the entries.
 function describeFailedRun(err) {
     const downloader = config_api.getConfigItem('ytdl_default_downloader');
+    // a run that exited 0 resolves with its standard error as a string, which the output parser can still reject
+    if (typeof err === 'string') return summarizeStderr(err);
     if (!err || typeof err !== 'object') return String(err);
     if (err.exitCode > 0) {
-        const stderr_lines = (typeof err.stderr === 'string' ? err.stderr : '').split(/\r?\n/).filter(line => line.trim());
-        const stderr_summary = stderr_lines.slice(-5).map(line => line.slice(0, 300)).join('\n');
+        const stderr_summary = summarizeStderr(err.stderr);
         return `${downloader} exited with code ${err.exitCode}` + (stderr_summary ? `:\n${stderr_summary}` : '.');
     }
     if (err.signal) return `${downloader} was ended by ${err.signal}.`;

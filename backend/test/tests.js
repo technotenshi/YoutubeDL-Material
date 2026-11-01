@@ -934,6 +934,20 @@ describe('Subscriptions', function() {
             assert(!errors.includes('SIGNED-SECRET'), errors);
         });
 
+        it('Trims standard error in the log when yt-dlp exits 0 but printed something that is not JSON', async function() {
+            const check_sub = sub();
+            await subscriptions_api.subscribe(check_sub, null, true);
+            const noise = Array.from({length: 30}, (_, i) => `WARNING: [youtube] noise line ${i + 1}`);
+            stubYoutubeDL({stdout_text: 'a line with {"unfinished\n', stderr: noise.join('\n') + '\n', exit_code: 0});
+
+            await subscriptions_api.getVideosForSub(check_sub.id);
+
+            await waitForFailedCheck();
+            const errors = logged('error').join('\n');
+            assert(errors.includes('noise line 30'), errors);
+            assert(!/noise line 1(\D|$)/.test(errors), errors);
+        });
+
         it('Fails when yt-dlp is killed after printing entries, so a cancelled check queues nothing', async function() {
             const check_sub = sub();
             await subscriptions_api.subscribe(check_sub, null, true);
