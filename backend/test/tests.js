@@ -1181,15 +1181,20 @@ describe('yt-dlp binary updates', function() {
             requested_paths.push(req.url);
             const tags_match = req.url.match(/^\/tags\/(.+)$/);
             const download_match = req.url.match(/^\/download\/([^/]+)\/(.+)$/);
+            // only releases from the known list are served, so no part of the request is written to the response
+            const release = download_match ? yt_dlp_tags.find(tag => tag === download_match[1]) : undefined;
             if (tags_match && tags_down) {
                 res.statusCode = 503;
                 res.end('rate limited');
             } else if (tags_match) {
                 // every fork gets the same tag list, newest first (as the GitHub tags API returns it)
+                res.setHeader('Content-Type', 'application/json');
                 res.end(JSON.stringify(yt_dlp_tags.map(name => ({name}))));
-            } else if (download_match) {
-                res.end(fakeBinary(download_match[1]));
+            } else if (release) {
+                res.setHeader('Content-Type', 'application/octet-stream');
+                res.end(fakeBinary(release));
             } else if (req.url.startsWith('/latest/')) {
+                res.setHeader('Content-Type', 'application/octet-stream');
                 res.end(fakeBinary('latest'));
             } else {
                 res.statusCode = 404;
