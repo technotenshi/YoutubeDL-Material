@@ -1,0 +1,34 @@
+# Path rules for .github/workflows/labeler.yml (actions/labeler v5).
+# A pull request gets every label whose rule matches at least one changed file.
+
+frontend:
+- changed-files:
+  - any-glob-to-any-file: ['src/app/**', 'src/*.ts', 'src/*.mjs']
+
+backend:
+- changed-files:
+  - any-glob-to-any-file: ['backend/**']
+
+tests:
+- changed-files:
+  - any-glob-to-any-file: ['backend/test/**', 'src/**/*.spec.ts', 'src/test.ts']
+
+api:
+- changed-files:
+  - any-glob-to-any-file: ['Public API v1.yaml', 'src/api-types/**']
+
+i18n:
+- changed-files:
+  - any-glob-to-any-file: ['src/assets/i18n/**']
+
+docker:
+- changed-files:
+  - any-glob-to-any-file: ['Dockerfile', '.dockerignore', 'docker-compose.yml', 'docker-utils/**', 'backend/entrypoint.sh', 'chart/**']
+
+github_actions:
+- changed-files:
+  - any-glob-to-any-file: ['.github/workflows/**']
+
+documentation:
+- changed-files:
+  - any-glob-to-any-file: ['**/*.md', 'docs/**']

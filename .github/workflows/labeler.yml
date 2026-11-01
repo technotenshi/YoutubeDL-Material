@@ -1,0 +1,17 @@
+# Applies labels to pull requests from the paths they change.
+# Rules live in .github/labeler.yml. Uses pull_request_target so fork PRs get
+# a write token; the job never checks out or runs PR code, keep it that way.
+# For more information, see: https://github.com/actions/labeler
+
+name: Labeler
+on: [pull_request_target]
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+    - uses: actions/labeler@v5
