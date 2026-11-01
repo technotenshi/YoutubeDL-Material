@@ -90,6 +90,8 @@ RUN npm install -g pm2@6.0.14 && \
     rm -rf /app/.npm && \
     apt update && \
     apt install -y --no-install-recommends gosu python3-minimal python-is-python3 python3-pip atomicparsley build-essential && \
+    # Ubuntu 24.04 marks its Python as externally managed (PEP 668); this container has one purpose, and
+    # yt-dlp runs on the system python3, so the package goes there rather than into a virtualenv
     pip install --break-system-packages pycryptodomex==3.24.1 && \
     apt remove -y --purge build-essential && \
     apt autoremove -y --purge && \

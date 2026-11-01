@@ -19,9 +19,8 @@ updates:
       # Major bumps for the Node and Ubuntu base images are held until the
       # runtime decision in #18 is made. Remove these two entries when #18
       # closes. The current pins (Node 16.14.2, libicu74 on Ubuntu 24.04) do
-      # not work with the newest majors. The Ubuntu entry now holds the
-      # runtime base at 24.04 (Python 3.12, which yt-dlp needs; see #56) and
-      # the build-only utils stage at 22.04.
+      # not work with the newest majors. The runtime base moved to 24.04 for
+      # Python 3.12 in #56; see docs/DECISIONS.md.
       - dependency-name: "node"
         update-types: ["version-update:semver-major"]
       - dependency-name: "ubuntu"
