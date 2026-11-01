@@ -337,6 +337,19 @@ describe('Database', async function() {
             const result = db_api.applyFilterLocalDB([{test1: {test2: 'test3'}}, {test4: 'test5'}], {'test1.test2': 'test3'}, 'find');
             assert(result && result['test1']['test2'] === 'test3');
         });
+
+        it('In a list', async function() {
+            const records = [{test: 'a'}, {test: 'b'}, {test: 'c'}, {other: 'a'}];
+            const result = db_api.applyFilterLocalDB(records, {test: {$in: ['a', 'c', 'd']}}, 'filter');
+            assert.deepStrictEqual(result, [{test: 'a'}, {test: 'c'}]);
+            assert.deepStrictEqual(db_api.applyFilterLocalDB(records, {test: {$in: []}}, 'filter'), []);
+        });
+
+        it('In a list, together with another property', async function() {
+            const records = [{uid: 'a', owner: 'x'}, {uid: 'a', owner: 'y'}, {uid: 'b', owner: 'x'}, {uid: 'c', owner: 'x'}];
+            const result = db_api.applyFilterLocalDB(records, {owner: 'x', uid: {$in: ['a', 'b']}}, 'filter');
+            assert.deepStrictEqual(result, [{uid: 'a', owner: 'x'}, {uid: 'b', owner: 'x'}]);
+        });
     })
 });
 
@@ -1072,6 +1085,285 @@ describe('Downloader', function() {
             assert(calls.length === 0);
             assert(chat === null);
             assert(!fs.existsSync(sample_path));
+        });
+    });
+});
+
+describe('Downloads API', function() {
+    const downloads_routes = require('../routes/downloads');
+    const routes_logger = require('../logger');
+
+    const owner = 'user-owner';
+    const other = 'user-other';
+    const history_size = 60;
+
+    // The DB reads a handler made, counted in records. A handler that filters in memory loads more than it returns.
+    const read_functions = ['getRecords', 'getRecord', 'getDownloadSummaries'];
+    let originals;
+    let loaded;
+    let original_logger_error;
+
+    // A queue record as createDownload writes it, with overrides.
+    function queueRecord(overrides = {}) {
+        return Object.assign({
+            url: 'https://www.youtube.com/watch?v=jNQXAC9IVRw',
+            type: 'video',
+            title: '',
+            user_uid: null,
+            sub_id: null,
+            sub_name: null,
+            prefetched_info: null,
+            options: {},
+            uid: uuid(),
+            step_index: 0,
+            paused: false,
+            running: false,
+            finished_step: true,
+            error: null,
+            percent_complete: null,
+            finished: false,
+            timestamp_start: Date.now()
+        }, overrides);
+    }
+
+    // An old failed download: finished, with large error text and prefetched info like the live queue holds.
+    function erroredRecord(overrides = {}) {
+        return queueRecord(Object.assign({
+            finished: true,
+            step_index: 1,
+            error: 'x'.repeat(10000),
+            error_type: 'unknown_error',
+            prefetched_info: {description: 'y'.repeat(10000)}
+        }, overrides));
+    }
+
+    function seed(records) {
+        return db_api.insertRecordsIntoTable('download_queue', records);
+    }
+
+    // Calls a handler with a fake request and response; `user_uid` null means unauthenticated.
+    async function call(handler, body, user_uid = null) {
+        const req = {body: body, isAuthenticated: () => !!user_uid, user: user_uid ? {uid: user_uid} : undefined};
+        const res = {
+            status_code: 200,
+            body: undefined,
+            send(sent) { this.body = sent; return this; },
+            sendStatus(code) { this.status_code = code; return this; }
+        };
+        await handler(req, res);
+        return res;
+    }
+
+    const list = (body, user_uid = null) => call(downloads_routes.listDownloads, body, user_uid);
+    const detail = (body, user_uid = null) => call(downloads_routes.getDownload, body, user_uid);
+
+    beforeEach(async function() {
+        await db_api.removeAllRecords('download_queue');
+        loaded = 0;
+        originals = {};
+        for (const name of read_functions) {
+            originals[name] = db_api[name];
+            db_api[name] = async (...args) => {
+                const result = await originals[name](...args);
+                loaded += Array.isArray(result) ? result.length : (result ? 1 : 0);
+                return result;
+            };
+        }
+        original_logger_error = routes_logger.error;
+    });
+
+    afterEach(async function() {
+        for (const name of read_functions) db_api[name] = originals[name];
+        routes_logger.error = original_logger_error;
+        await db_api.removeAllRecords('download_queue');
+    });
+
+    describe('List', function() {
+        it('reads only the requested downloads, however many others exist', async function() {
+            this.timeout(10000);
+            const wanted = [queueRecord({user_uid: owner}), queueRecord({user_uid: owner, finished: true}), erroredRecord({user_uid: owner})];
+            const history = Array.from({length: history_size}, () => erroredRecord({user_uid: owner}));
+            await seed([...history, ...wanted]);
+
+            const res = await list({uids: wanted.map(download => download['uid'])}, owner);
+
+            assert.deepStrictEqual(res.body.downloads.map(download => download['uid']).sort(), wanted.map(download => download['uid']).sort());
+            assert.strictEqual(loaded, 3);
+        });
+
+        it('does not return another user\'s download, even when asked for its uid', async function() {
+            const mine = queueRecord({user_uid: owner});
+            const theirs = queueRecord({user_uid: other});
+            await seed([mine, theirs]);
+
+            const res = await list({uids: [mine['uid'], theirs['uid']]}, owner);
+
+            assert.deepStrictEqual(res.body.downloads.map(download => download['uid']), [mine['uid']]);
+            assert.strictEqual(loaded, 1);
+        });
+
+        it('returns an unauthenticated caller only downloads without an owner', async function() {
+            const unowned = queueRecord({user_uid: null});
+            await seed([unowned, queueRecord({user_uid: owner})]);
+
+            const res = await list({uids: null});
+
+            assert.deepStrictEqual(res.body.downloads.map(download => download['uid']), [unowned['uid']]);
+        });
+
+        it('returns every download of the user when no uids are given', async function() {
+            const records = [queueRecord({user_uid: owner}), erroredRecord({user_uid: owner}), queueRecord({user_uid: other})];
+            await seed(records);
+
+            for (const uids of [undefined, null]) {
+                const res = await list({uids: uids}, owner);
+                assert.deepStrictEqual(res.body.downloads.map(download => download['uid']).sort(), [records[0]['uid'], records[1]['uid']].sort());
+            }
+        });
+
+        it('returns nothing for an empty uids list and for unknown uids', async function() {
+            await seed([queueRecord({user_uid: owner})]);
+
+            assert.deepStrictEqual((await list({uids: []}, owner)).body.downloads, []);
+            assert.deepStrictEqual((await list({uids: [uuid()]}, owner)).body.downloads, []);
+        });
+
+        it('leaves out the error text and prefetched info, but still tells which downloads errored', async function() {
+            const errored = erroredRecord({user_uid: owner});
+            const finished = queueRecord({user_uid: owner, finished: true, step_index: 3, percent_complete: 100});
+            const empty_error = queueRecord({user_uid: owner, finished: true, error: ''});
+            const no_error_field = queueRecord({user_uid: owner, finished: true});
+            delete no_error_field['error'];
+            const running = queueRecord({user_uid: owner, running: true, step_index: 2, percent_complete: 40, prefetched_info: {description: 'z'}});
+            await seed([errored, finished, empty_error, no_error_field, running]);
+
+            const res = await list({uids: null}, owner);
+
+            const by_uid = Object.fromEntries(res.body.downloads.map(download => [download['uid'], download]));
+            assert.strictEqual(Object.keys(by_uid).length, 5);
+            for (const download of res.body.downloads) {
+                assert(!('error' in download), 'error text must not be listed');
+                assert(!('prefetched_info' in download), 'prefetched_info must not be listed');
+                assert(!('options' in download), 'options must not be listed');
+            }
+            assert.strictEqual(by_uid[errored['uid']]['has_error'], true);
+            assert.strictEqual(by_uid[finished['uid']]['has_error'], false);
+            assert.strictEqual(by_uid[empty_error['uid']]['has_error'], false);
+            assert.strictEqual(by_uid[no_error_field['uid']]['has_error'], false);
+            assert.strictEqual(by_uid[running['uid']]['has_error'], false);
+            assert(JSON.stringify(res.body).length < 10000, 'the list must not grow with the stored error text');
+        });
+
+        it('lists what the Downloads page shows for a running download', async function() {
+            const running = queueRecord({
+                user_uid: owner, uid: 'running-uid', url: 'https://example.com/v', title: 'A title', sub_name: 'A sub', timestamp_start: 1700000000000,
+                running: true, step_index: 2, percent_complete: 0, finished_step: false
+            });
+            await seed([running]);
+
+            const res = await list({uids: null}, owner);
+
+            assert.deepStrictEqual(res.body.downloads, [{
+                uid: 'running-uid', url: 'https://example.com/v', type: 'video', title: 'A title', sub_name: 'A sub', timestamp_start: 1700000000000,
+                step_index: 2, percent_complete: 0, finished: false, running: true, paused: false, finished_step: false, has_error: false
+            }]);
+        });
+
+        it('keeps only what playback needs of a finished download\'s container', async function() {
+            const single = queueRecord({user_uid: owner, finished: true, step_index: 3, container: {uid: 'file-uid', id: 'video-id', title: 'T', path: '/p/f.mp4', size: 5}});
+            const playlist = queueRecord({user_uid: owner, finished: true, step_index: 3, container: {id: 'playlist-id', name: 'N', uids: ['a', 'b']}});
+            await seed([single, playlist]);
+
+            const res = await list({uids: null}, owner);
+
+            const by_uid = Object.fromEntries(res.body.downloads.map(download => [download['uid'], download]));
+            assert.deepStrictEqual(by_uid[single['uid']]['container'], {uid: 'file-uid', id: 'video-id'});
+            assert.deepStrictEqual(by_uid[playlist['uid']]['container'], {id: 'playlist-id', uids: ['a', 'b']});
+        });
+
+        it('does not change the stored records', async function() {
+            const errored = erroredRecord({user_uid: owner, container: {uid: 'file-uid', id: 'video-id', uids: ['a']}});
+            await seed([errored]);
+            const before = JSON.stringify(await db_api.getRecords('download_queue'));
+
+            const res = await list({uids: null}, owner);
+            res.body.downloads[0]['container']['uids'].push('changed');
+            res.body.downloads[0]['title'] = 'changed';
+
+            assert.strictEqual(JSON.stringify(await db_api.getRecords('download_queue')), before);
+        });
+
+        it('rejects a uids value that is not a list of strings, without reading', async function() {
+            await seed([queueRecord({user_uid: owner})]);
+
+            for (const uids of ['abc', {$ne: null}, [{$ne: null}], [1], [null]]) {
+                loaded = 0;
+                const res = await list({uids: uids}, owner);
+                assert.strictEqual(res.status_code, 400, JSON.stringify(uids));
+                assert.strictEqual(res.body, undefined);
+                assert.strictEqual(loaded, 0);
+            }
+        });
+
+        it('answers 500 when the database read fails', async function() {
+            routes_logger.error = () => {};
+            for (const name of read_functions) db_api[name] = async () => { throw new Error('database unavailable'); };
+
+            const res = await list({uids: null}, owner);
+
+            assert.strictEqual(res.status_code, 500);
+            assert.strictEqual(res.body, undefined);
+        });
+    });
+
+    describe('Single download', function() {
+        it('returns a download with its error text to its owner', async function() {
+            const errored = erroredRecord({user_uid: owner});
+            await seed([errored]);
+
+            const res = await detail({download_uid: errored['uid']}, owner);
+
+            assert.strictEqual(res.body.download['uid'], errored['uid']);
+            assert.strictEqual(res.body.download['error'], 'x'.repeat(10000));
+        });
+
+        it('returns null for another user\'s download and for an unknown uid', async function() {
+            const theirs = queueRecord({user_uid: other});
+            await seed([theirs]);
+
+            assert.deepStrictEqual((await detail({download_uid: theirs['uid']}, owner)).body, {download: null});
+            assert.deepStrictEqual((await detail({download_uid: uuid()}, owner)).body, {download: null});
+        });
+
+        it('keeps unowned downloads readable without logging in, and hides owned ones from that caller', async function() {
+            const unowned = queueRecord({user_uid: null});
+            const owned = queueRecord({user_uid: owner});
+            await seed([unowned, owned]);
+
+            assert.strictEqual((await detail({download_uid: unowned['uid']})).body.download['uid'], unowned['uid']);
+            assert.deepStrictEqual((await detail({download_uid: owned['uid']})).body, {download: null});
+        });
+
+        it('rejects a download_uid that is not a string, without reading', async function() {
+            await seed([queueRecord({user_uid: owner})]);
+
+            for (const download_uid of [{$ne: null}, ['a'], 1, undefined, null]) {
+                loaded = 0;
+                const res = await detail({download_uid: download_uid}, owner);
+                assert.strictEqual(res.status_code, 400, JSON.stringify(download_uid));
+                assert.strictEqual(res.body, undefined);
+                assert.strictEqual(loaded, 0);
+            }
+        });
+
+        it('answers 500 when the database read fails', async function() {
+            routes_logger.error = () => {};
+            for (const name of read_functions) db_api[name] = async () => { throw new Error('database unavailable'); };
+
+            const res = await detail({download_uid: uuid()}, owner);
+
+            assert.strictEqual(res.status_code, 500);
+            assert.strictEqual(res.body, undefined);
         });
     });
 });

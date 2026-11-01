@@ -822,13 +822,17 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/GetAllDownloadsResponse'
+        '400':
+          description: uids is not an array of strings.
+        '500':
+          description: The downloads could not be read.
       requestBody:
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/GetAllDownloadsRequest'
       operationId: post-api-downloads
-      description: Retrieves all downloads recorded by the server and their status.
+      description: Retrieves the requesting user's downloads and their status as summaries. A summary leaves out the error text, the prefetched info and the options; it only says whether the download has an error. Use /api/download to get the full download, including the error text.
       security:
         - Auth query parameter: []
   /api/download:
@@ -842,13 +846,17 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/GetDownloadResponse'
+        '400':
+          description: download_uid is not a string.
+        '500':
+          description: The download could not be read.
       requestBody:
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/GetDownloadRequest'
         description: ''
-      description: "Gets a single download using its download_id."
+      description: "Gets a single download, including its error text, using its download_id. Only returns the download to the user it belongs to; a download that belongs to someone else is answered the same way as one that does not exist (download is null)."
       security:
         - Auth query parameter: []
       tags:
@@ -1763,7 +1771,10 @@ components:
       type: object
       properties:
         download:
-          $ref: '#/components/schemas/Download'
+          allOf:
+            - $ref: '#/components/schemas/Download'
+          nullable: true
+          description: The full download. Null if there is no download with this UID that belongs to the requesting user.
     RestartDownloadResponse:
       allOf:
         - $ref: '#/components/schemas/SuccessObject'
@@ -1778,7 +1789,7 @@ components:
           type: array
           items:
             type: string
-          description: Filters downloads with the array
+          description: Only these downloads are read. Omit or null for all of the user's downloads; an empty array returns none.
           nullable: true
     GetAllDownloadsResponse:
       type: object
@@ -1786,7 +1797,7 @@ components:
         downloads:
           type: array
           items:
-            $ref: '#/components/schemas/Download'
+            $ref: '#/components/schemas/DownloadSummary'
     ClearDownloadsRequest:
       type: object
       properties:
@@ -2764,6 +2775,64 @@ components:
           type: string
         prefetched_info:
           type: object
+    DownloadSummary:
+      description: What the downloads list shows of a download. The error text, prefetched info and options of a download can be very large, so they are only returned by /api/download.
+      required:
+        - url
+        - type
+        - title
+        - uid
+        - step_index
+        - paused
+        - running
+        - finished_step
+        - percent_complete
+        - finished
+        - timestamp_start
+        - has_error
+      type: object
+      properties:
+        uid:
+          type: string
+        running:
+          type: boolean
+        finished:
+          type: boolean
+        paused:
+          type: boolean
+        cancelled:
+          type: boolean
+        finished_step:
+          type: boolean
+        url:
+          type: string
+        type:
+          type: string
+        title:
+          type: string
+        step_index:
+          type: number
+        percent_complete:
+          type: number
+        timestamp_start:
+          type: number
+        has_error:
+          type: boolean
+          description: True if the download has error text. Get the text from /api/download.
+        sub_name:
+          type: string
+        container:
+          type: object
+          description: Set once the download has finished. Only what opening the result in the player needs; a playlist has id and uids, a single file has uid and id.
+          properties:
+            uid:
+              type: string
+            id:
+              type: string
+            uids:
+              type: array
+              items:
+                type: string
     Task:
       required:
         - key

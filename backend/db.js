@@ -353,6 +353,44 @@ exports.getRecords = async (table, filter_obj = null, return_count = false, sort
     return !return_count ? await cursor.toArray() : await cursor.count();
 }
 
+// What the Downloads list shows of a download_queue record. The stored error text, prefetched_info and options
+// can be hundreds of KB each, so the list gets only has_error (whether the error text is set) in their place.
+const DOWNLOAD_SUMMARY_FIELDS = ['uid', 'url', 'type', 'title', 'timestamp_start', 'sub_name', 'step_index', 'percent_complete',
+                                 'finished', 'running', 'paused', 'finished_step', 'cancelled'];
+// the part of a finished download's container that playback navigation reads
+const DOWNLOAD_SUMMARY_CONTAINER_FIELDS = ['uid', 'id', 'uids'];
+
+const toDownloadSummary = (record) => {
+    const summary = {};
+    for (const field of DOWNLOAD_SUMMARY_FIELDS) {
+        if (record[field] !== undefined) summary[field] = record[field];
+    }
+    if (record['container']) {
+        summary['container'] = {};
+        for (const field of DOWNLOAD_SUMMARY_CONTAINER_FIELDS) {
+            if (record['container'][field] !== undefined) summary['container'][field] = _.cloneDeep(record['container'][field]);
+        }
+    }
+    summary['has_error'] = !!record['error'];
+    return summary;
+}
+
+// Reads download_queue records matching filter_obj as summaries. The selection and the field projection happen in
+// the database, so records and fields the list does not show are never loaded. Stored records are not touched.
+exports.getDownloadSummaries = async (filter_obj) => {
+    // local db override
+    if (using_local_db) {
+        return exports.applyFilterLocalDB(local_db.get('download_queue'), filter_obj, 'filter').value().map(toDownloadSummary);
+    }
+
+    const projection = {_id: 0};
+    for (const field of DOWNLOAD_SUMMARY_FIELDS) projection[field] = 1;
+    for (const field of DOWNLOAD_SUMMARY_CONTAINER_FIELDS) projection[`container.${field}`] = 1;
+    // true unless error is missing, null or an empty string, like the truthiness check on the stored value
+    projection['has_error'] = {$not: [{$in: [{$ifNull: ['$error', '']}, ['']]}]};
+    return await database.collection('download_queue').aggregate([{$match: filter_obj}, {$project: projection}]).toArray();
+}
+
 // Update
 
 exports.updateRecord = async (table, filter_obj, update_obj, nested_mode = false) => {
@@ -818,6 +856,8 @@ exports.applyFilterLocalDB = (db_path, filter_obj, operation) => {
                         filtered &= (record[filter_prop].search(new RegExp(filter_prop_value['$regex'], filter_prop_value['$options'])) !== -1);
                     } else if ('$ne' in filter_prop_value) {
                         filtered &= filter_prop in record && record[filter_prop] !== filter_prop_value['$ne'];
+                    } else if ('$in' in filter_prop_value) {
+                        filtered &= filter_prop_value['$in'].includes(record[filter_prop]);
                     } else if ('$lt' in filter_prop_value) {
                         filtered &= filter_prop in record && record[filter_prop] < filter_prop_value['$lt'];
                     } else if ('$gt' in filter_prop_value) {

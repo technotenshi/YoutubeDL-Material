@@ -4,7 +4,7 @@
 
 export type GetAllDownloadsRequest = {
     /**
-     * Filters downloads with the array
+     * Only these downloads are read. Omit or null for all of the user's downloads; an empty array returns none.
      */
     uids?: Array<string> | null;
 };

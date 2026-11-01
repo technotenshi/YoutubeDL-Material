@@ -8,7 +8,9 @@ import { MatDialog } from '@angular/material/dialog';
 import { ConfirmDialogComponent } from 'app/dialogs/confirm-dialog/confirm-dialog.component';
 import { MatSort } from '@angular/material/sort';
 import { Clipboard } from '@angular/cdk/clipboard';
-import { Download } from 'api-types';
+import { DownloadSummary, GetAllDownloadsResponse } from 'api-types';
+import { Subject, timer, of } from 'rxjs';
+import { catchError, exhaustMap, finalize, takeUntil } from 'rxjs/operators';
 
 @Component({
   selector: 'app-downloads',
@@ -20,9 +22,15 @@ export class DownloadsComponent implements OnInit, OnDestroy {
   @Input() uids: string[] = null;
 
   downloads_check_interval = 1000;
-  downloads = [];
+  downloads: DownloadSummary[] = [];
   finished_downloads = [];
-  interval_id = null;
+
+  // Set once the recurring check runs, so it starts only once however often it is asked to
+  polling = false;
+  last_downloads_json: string = null;
+  // Downloads whose error text is being loaded for the error dialog
+  error_loading_uids = new Set<string>();
+  destroyed = new Subject<void>();
 
   keys = Object.keys;
 
@@ -49,44 +57,45 @@ export class DownloadsComponent implements OnInit, OnDestroy {
   downloadActions: DownloadAction[] = [
     {
       tooltip: $localize`Watch content`,
-      action: (download: Download) => this.watchContent(download),
-      show: (download: Download) => download.finished && !download.error,
+      action: (download: DownloadSummary) => this.watchContent(download),
+      show: (download: DownloadSummary) => download.finished && !download.has_error,
       icon: 'smart_display'
     },
     {
       tooltip: $localize`Show error`,
-      action: (download: Download) => this.showError(download),
-      show: (download: Download) => download.finished && !!download.error,
-      icon: 'warning'
+      action: (download: DownloadSummary) => this.showError(download),
+      show: (download: DownloadSummary) => download.finished && download.has_error,
+      icon: 'warning',
+      loading: (download: DownloadSummary) => this.error_loading_uids.has(download.uid)
     },
     {
       tooltip: $localize`Restart`,
-      action: (download: Download) => this.restartDownload(download),
-      show: (download: Download) => download.finished,
+      action: (download: DownloadSummary) => this.restartDownload(download),
+      show: (download: DownloadSummary) => download.finished,
       icon: 'restart_alt'
     },
     {
       tooltip: $localize`Pause`,
-      action: (download: Download) => this.pauseDownload(download),
-      show: (download: Download) => !download.finished && (!download.paused || !download.finished_step),
+      action: (download: DownloadSummary) => this.pauseDownload(download),
+      show: (download: DownloadSummary) => !download.finished && (!download.paused || !download.finished_step),
       icon: 'pause'
     },
     {
       tooltip: $localize`Resume`,
-      action: (download: Download) => this.resumeDownload(download),
-      show: (download: Download) => !download.finished && download.paused && download.finished_step,
+      action: (download: DownloadSummary) => this.resumeDownload(download),
+      show: (download: DownloadSummary) => !download.finished && download.paused && download.finished_step,
       icon: 'play_arrow'
     },
     {
       tooltip: $localize`Cancel`,
-      action: (download: Download) => this.cancelDownload(download),
-      show: (download: Download) => !download.finished && !download.paused && !download.cancelled,
+      action: (download: DownloadSummary) => this.cancelDownload(download),
+      show: (download: DownloadSummary) => !download.finished && !download.paused && !download.cancelled,
       icon: 'cancel'
     },
     {
       tooltip: $localize`Clear`,
-      action: (download: Download) => this.clearDownload(download),
-      show: (download: Download) => download.finished || download.paused,
+      action: (download: DownloadSummary) => this.clearDownload(download),
+      show: (download: DownloadSummary) => download.finished || download.paused,
       icon: 'delete'
     }
   ]
@@ -104,7 +113,7 @@ export class DownloadsComponent implements OnInit, OnDestroy {
     this.recalculateColumns();
   }
 
-  sort_downloads = (a: Download, b: Download): number => {
+  sort_downloads = (a: DownloadSummary, b: DownloadSummary): number => {
     const result = b.timestamp_start - a.timestamp_start;
     return result;
   }
@@ -119,7 +128,7 @@ export class DownloadsComponent implements OnInit, OnDestroy {
     if (this.postsService.initialized) {
       this.getCurrentDownloadsRecurring();
     } else {
-      this.postsService.service_initialized.subscribe(init => {
+      this.postsService.service_initialized.pipe(takeUntil(this.destroyed)).subscribe(init => {
         if (init) {
           this.getCurrentDownloadsRecurring();
         }
@@ -132,34 +141,35 @@ export class DownloadsComponent implements OnInit, OnDestroy {
       this.router.navigate(['/home']);
       return;
     }
-    this.getCurrentDownloads();
-    this.interval_id = setInterval(() => {
-      this.getCurrentDownloads();
-    }, this.downloads_check_interval);
+    if (this.polling) return;
+    this.polling = true;
+    // exhaustMap skips a tick while the previous request is still in flight, so requests never overlap
+    timer(0, this.downloads_check_interval).pipe(
+      exhaustMap(() => this.postsService.getCurrentDownloads(this.uids).pipe(catchError(() => of(null)))),
+      takeUntil(this.destroyed)
+    ).subscribe(res => this.updateDownloads(res));
   }
 
   ngOnDestroy(): void {
-    if (this.interval_id) { clearInterval(this.interval_id) }
+    this.destroyed.next();
+    this.destroyed.complete();
   }
 
-  getCurrentDownloads(): void {
-    this.postsService.getCurrentDownloads(this.uids).subscribe(res => {
-      if (res['downloads'] !== null 
-        && res['downloads'] !== undefined
-        && JSON.stringify(this.downloads) !== JSON.stringify(res['downloads'])) {
-          this.downloads = this.combineDownloads(this.downloads, res['downloads']);
-          // this.downloads = res['downloads'];
-          this.downloads.sort(this.sort_downloads);
-          this.dataSource = new MatTableDataSource<Download>(this.downloads);
-          this.dataSource.paginator = this.paginator;
-          this.dataSource.sort = this.sort;
-          this.paused_download_exists = this.downloads.find(download => download['paused'] && !download['error']);
-          this.running_download_exists = this.downloads.find(download => !download['paused'] && !download['finished']);
-      } else {
-        // failed to get downloads
-      }
-      this.downloads_retrieved = true;
-    });
+  // res is null if the request failed: keep the downloads we have, the next tick tries again
+  updateDownloads(res: GetAllDownloadsResponse | null): void {
+    if (!res) return;
+    const downloads_json = JSON.stringify(res.downloads);
+    if (res.downloads && downloads_json !== this.last_downloads_json) {
+      this.last_downloads_json = downloads_json;
+      this.downloads = this.combineDownloads(this.downloads, res.downloads);
+      this.downloads.sort(this.sort_downloads);
+      this.dataSource = new MatTableDataSource<DownloadSummary>(this.downloads);
+      this.dataSource.paginator = this.paginator;
+      this.dataSource.sort = this.sort;
+      this.paused_download_exists = this.downloads.some(download => download.paused && !download.has_error);
+      this.running_download_exists = this.downloads.some(download => !download.paused && !download.finished);
+    }
+    this.downloads_retrieved = true;
   }
 
   clearDownloadsByType(): void {
@@ -203,7 +213,7 @@ export class DownloadsComponent implements OnInit, OnDestroy {
     });
   }
 
-  pauseDownload(download: Download): void {
+  pauseDownload(download: DownloadSummary): void {
     this.postsService.pauseDownload(download['uid']).subscribe(res => {
       if (!res['success']) {
         this.postsService.openSnackBar($localize`Failed to pause download! See server logs for more info.`);
@@ -219,7 +229,7 @@ export class DownloadsComponent implements OnInit, OnDestroy {
     });
   }
 
-  resumeDownload(download: Download): void {
+  resumeDownload(download: DownloadSummary): void {
     this.postsService.resumeDownload(download['uid']).subscribe(res => {
       if (!res['success']) {
         this.postsService.openSnackBar($localize`Failed to resume download! See server logs for more info.`);
@@ -235,7 +245,7 @@ export class DownloadsComponent implements OnInit, OnDestroy {
     });
   }
 
-  restartDownload(download: Download): void {
+  restartDownload(download: DownloadSummary): void {
     this.postsService.restartDownload(download['uid']).subscribe(res => {
       if (!res['success']) {
         this.postsService.openSnackBar($localize`Failed to restart download! See server logs for more info.`);
@@ -247,7 +257,7 @@ export class DownloadsComponent implements OnInit, OnDestroy {
     });
   }
 
-  cancelDownload(download: Download): void {
+  cancelDownload(download: DownloadSummary): void {
     this.postsService.cancelDownload(download['uid']).subscribe(res => {
       if (!res['success']) {
         this.postsService.openSnackBar($localize`Failed to cancel download! See server logs for more info.`);
@@ -255,7 +265,7 @@ export class DownloadsComponent implements OnInit, OnDestroy {
     });
   }
 
-  clearDownload(download: Download): void {
+  clearDownload(download: DownloadSummary): void {
     this.postsService.clearDownload(download['uid']).subscribe(res => {
       if (!res['success']) {
         this.postsService.openSnackBar($localize`Failed to pause download! See server logs for more info.`);
@@ -263,7 +273,7 @@ export class DownloadsComponent implements OnInit, OnDestroy {
     });
   }
 
-  watchContent(download: Download): void {
+  watchContent(download: DownloadSummary): void {
     const container = download['container'];
     localStorage.setItem('player_navigator', this.router.url.split(';')[0]);
     const is_playlist = container['uids']; // hacky, TODO: fix
@@ -274,34 +284,46 @@ export class DownloadsComponent implements OnInit, OnDestroy {
     }
   }
 
-  combineDownloads(downloads_old: Download[], downloads_new: Download[]): Download[] {
-    // only keeps downloads that exist in the new set
-    downloads_old = downloads_old.filter(download_old => downloads_new.some(download_new => download_new.uid === download_old.uid));
+  combineDownloads(downloads_old: DownloadSummary[], downloads_new: DownloadSummary[]): DownloadSummary[] {
+    const old_by_uid = new Map(downloads_old.map(download_old => [download_old.uid, download_old]));
 
-    // add downloads from the new set that the old one doesn't have
-    const downloads_to_add = downloads_new.filter(download_new => !downloads_old.some(download_old => download_new.uid === download_old.uid));
-    downloads_old.push(...downloads_to_add);
-    downloads_old.forEach(download_old => {
-      const download_new = downloads_new.find(download_to_check => download_old.uid === download_to_check.uid);
-      Object.keys(download_new).forEach(key => {
-        download_old[key] = download_new[key];
-      });
-  
+    // only keeps downloads that exist in the new set; known ones are updated in place so their rows keep their identity
+    return downloads_new.map(download_new => {
+      const download_old = old_by_uid.get(download_new.uid);
+      if (!download_old) return download_new;
       Object.keys(download_old).forEach(key => {
-        if (!download_new[key]) delete download_old[key];
+        if (!(key in download_new)) delete download_old[key];
       });
+      return Object.assign(download_old, download_new);
     });
-
-    return downloads_old;
   }
 
-  showError(download: Download): void {
-    console.log(download)
+  // The list only says whether a download has an error; the text is loaded when the user asks for it
+  showError(download: DownloadSummary): void {
+    if (this.error_loading_uids.has(download.uid)) return;
+    this.error_loading_uids.add(download.uid);
+    this.postsService.getCurrentDownload(download.uid).pipe(
+      takeUntil(this.destroyed),
+      finalize(() => this.error_loading_uids.delete(download.uid))
+    ).subscribe({
+      next: res => {
+        const error_text = res.download ? res.download.error : null;
+        if (error_text) {
+          this.openErrorDialog(download.url, error_text);
+        } else {
+          this.postsService.openSnackBar($localize`The error is no longer available. The download may have been cleared.`);
+        }
+      },
+      error: () => this.postsService.openSnackBar($localize`Failed to load the error! See server logs for more info.`)
+    });
+  }
+
+  openErrorDialog(url: string, error_text: string): void {
     const copyToClipboardEmitter = new EventEmitter<boolean>();
     this.dialog.open(ConfirmDialogComponent, {
       data: {
-        dialogTitle: $localize`Error for ${download['url']}:url:`,
-        dialogText: download['error'],
+        dialogTitle: $localize`Error for ${url}:url:`,
+        dialogText: error_text,
         submitText: $localize`Copy to clipboard`,
         cancelText: $localize`Close`,
         closeOnSubmit: false,
@@ -312,7 +334,7 @@ export class DownloadsComponent implements OnInit, OnDestroy {
     copyToClipboardEmitter.subscribe(done => {
       if (done) {
         this.postsService.openSnackBar($localize`Copied to clipboard!`);
-        this.clipboard.copy(download['error']);
+        this.clipboard.copy(error_text);
       }
     });
   }
@@ -330,8 +352,8 @@ export class DownloadsComponent implements OnInit, OnDestroy {
 
 interface DownloadAction {
   tooltip: string,
-  action: (download: Download) => void,
-  show: (download: Download) => boolean,
+  action: (download: DownloadSummary) => void,
+  show: (download: DownloadSummary) => boolean,
   icon: string,
-  loading?: (download: Download) => boolean
+  loading?: (download: DownloadSummary) => boolean
 }
