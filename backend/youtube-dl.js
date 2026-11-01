@@ -96,8 +96,8 @@ exports.checkForYoutubeDLUpdate = async () => {
     const selected_fork = config_api.getConfigItem('ytdl_default_downloader');
     const output_file_path = getYoutubeDLPath();
     // get current version
-    let current_app_details_exists = fs.existsSync(CONSTS.DETAILS_BIN_PATH) && !!fs.readJSONSync(CONSTS.DETAILS_BIN_PATH)[selected_fork];
-    if (!current_app_details_exists) {
+    let has_recorded_details = fs.existsSync(CONSTS.DETAILS_BIN_PATH) && !!fs.readJSONSync(CONSTS.DETAILS_BIN_PATH)[selected_fork];
+    if (!has_recorded_details) {
         logger.warn(`Failed to get youtube-dl binary details at location '${CONSTS.DETAILS_BIN_PATH}'. Generating file...`);
         updateDetailsJSON(CONSTS.OUTDATED_YOUTUBEDL_VERSION, selected_fork, output_file_path);
     }
@@ -150,8 +150,14 @@ async function downloadLatestYoutubeDLBinaryGeneric(youtubedl_fork, new_version,
 // Only a binary that ran is moved into place, so a working binary is never replaced by one that cannot run.
 async function installVerifiedBinary(youtubedl_fork, release, output_path) {
     const file_ext = is_windows ? '.exe' : '';
-    const fork_details = exports.youtubedl_forks[youtubedl_fork];
-    const download_url = `${release ? fork_details['versioned_download_url'].replace('{version}', release) : fork_details['download_url']}${file_ext}`;
+    const python_version = await getPythonVersion(youtubedl_fork);
+    const python_label = python_version ? `Python ${python_version.join('.')}` : 'a Python of unknown version';
+    // without a known release there is nothing safe to install: 'latest' could be one this Python cannot run
+    if (!release) {
+        logger.error(`Could not determine which ${youtubedl_fork} release to install for ${python_label}. The existing ${youtubedl_fork} binary was kept.`);
+        return;
+    }
+    const download_url = `${exports.youtubedl_forks[youtubedl_fork]['versioned_download_url'].replace('{version}', release)}${file_ext}`;
     const temp_path = `${output_path}.download`;
 
     try {
@@ -161,8 +167,7 @@ async function installVerifiedBinary(youtubedl_fork, release, output_path) {
         await fs.move(temp_path, output_path, {overwrite: true});
         updateDetailsJSON(release, youtubedl_fork, output_path);
     } catch (e) {
-        const python_version = await getPythonVersion(youtubedl_fork);
-        logger.error(`Failed to install ${youtubedl_fork} ${release || 'latest'} on Python ${python_version ? python_version.join('.') : 'of unknown version'}: ${e.shortMessage || e.message}. ` +
+        logger.error(`Failed to install ${youtubedl_fork} ${release} on ${python_label}: ${e.shortMessage || e.message}. ` +
                      `The existing ${youtubedl_fork} binary was kept.`);
     } finally {
         await fs.remove(temp_path);

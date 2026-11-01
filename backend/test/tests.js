@@ -1164,6 +1164,7 @@ describe('yt-dlp binary updates', function() {
     let work_dir = null;
     let requested_paths = null;
     let broken_releases = null;
+    let tags_down = false;
     let log_lines = null;
     let saved = null;
 
@@ -1180,7 +1181,10 @@ describe('yt-dlp binary updates', function() {
             requested_paths.push(req.url);
             const tags_match = req.url.match(/^\/tags\/(.+)$/);
             const download_match = req.url.match(/^\/download\/([^/]+)\/(.+)$/);
-            if (tags_match) {
+            if (tags_match && tags_down) {
+                res.statusCode = 503;
+                res.end('rate limited');
+            } else if (tags_match) {
                 // every fork gets the same tag list, newest first (as the GitHub tags API returns it)
                 res.end(JSON.stringify(yt_dlp_tags.map(name => ({name}))));
             } else if (download_match) {
@@ -1217,6 +1221,7 @@ describe('yt-dlp binary updates', function() {
     beforeEach(function() {
         requested_paths = [];
         broken_releases = new Set();
+        tags_down = false;
         log_lines = [];
         for (const level of ['warn', 'error', 'info']) {
             app_logger[level] = (message) => { log_lines.push(`${level}: ${message}`); };
@@ -1293,7 +1298,7 @@ describe('yt-dlp binary updates', function() {
             assert.deepStrictEqual(fs.readdirSync(work_dir).sort(), ['bin', 'yt-dlp']);
         });
 
-        describe('when the download cannot run', function() {
+        describe('when no working install is possible', function() {
             const previous_script = '#!/bin/sh\necho "2026.10.21"\n';
 
             const installPrevious = (binary_path, version) => {
@@ -1329,6 +1334,25 @@ describe('yt-dlp binary updates', function() {
                 assert(requested_paths.includes('/download/2026.10.26/yt-dlp'), requested_paths.join(', '));
                 assert.strictEqual(fs.readFileSync(binary_path, 'utf8'), previous_script);
                 assert.strictEqual(readDetails()['yt-dlp']['version'], '2026.10.21');
+            });
+
+            it('An update check keeps the binary when no release can be determined', async function() {
+                for (const python_version of ['3.10.12', '3.12.3']) {
+                    setPython(python_version);
+                    requested_paths = [];
+                    log_lines = [];
+                    const binary_path = path.join('appdata', 'bin', 'yt-dlp');
+                    installPrevious(binary_path, '2026.10.21');
+                    tags_down = true;
+
+                    await youtubedl_api.checkForYoutubeDLUpdate();
+
+                    assert(!requested_paths.some(url => url.startsWith('/latest/') || url.startsWith('/download/')), requested_paths.join(', '));
+                    assert.strictEqual(fs.readFileSync(binary_path, 'utf8'), previous_script);
+                    assert.strictEqual(readDetails()['yt-dlp']['version'], '2026.10.21');
+                    const errors = log_lines.filter(line => line.startsWith('error:'));
+                    assert(errors.some(line => line.includes(`Python ${python_version}`)), errors.join('\n'));
+                }
             });
         });
 
