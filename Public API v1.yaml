@@ -2813,7 +2813,11 @@ components:
         step_index:
           type: number
         percent_complete:
-          type: number
+          description: Null until the download step reports progress, then a string with two decimals (for example "42.50"), and the number 100 once the download has finished. These are the values the server stores.
+          nullable: true
+          oneOf:
+            - type: number
+            - type: string
         timestamp_start:
           type: number
         has_error:
@@ -2821,6 +2825,8 @@ components:
           description: True if the download has error text. Get the text from /api/download.
         sub_name:
           type: string
+          nullable: true
+          description: Name of the subscription the download came from. Null for a one-off download.
         container:
           type: object
           description: Set once the download has finished. Only what opening the result in the player needs; a playlist has id and uids, a single file has uid and id.

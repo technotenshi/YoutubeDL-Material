@@ -1269,6 +1269,19 @@ describe('Downloads API', function() {
             }]);
         });
 
+        it('keeps the null progress and subscription name of a new download and the string progress of a running one', async function() {
+            const created = queueRecord({user_uid: owner});
+            const running = queueRecord({user_uid: owner, running: true, step_index: 2, percent_complete: '42.50'});
+            await seed([created, running]);
+
+            const res = await list({uids: null}, owner);
+
+            const by_uid = Object.fromEntries(res.body.downloads.map(download => [download['uid'], download]));
+            assert.strictEqual(by_uid[created['uid']]['percent_complete'], null);
+            assert.strictEqual(by_uid[created['uid']]['sub_name'], null);
+            assert.strictEqual(by_uid[running['uid']]['percent_complete'], '42.50');
+        });
+
         it('keeps only what playback needs of a finished download\'s container', async function() {
             const single = queueRecord({user_uid: owner, finished: true, step_index: 3, container: {uid: 'file-uid', id: 'video-id', title: 'T', path: '/p/f.mp4', size: 5}});
             const playlist = queueRecord({user_uid: owner, finished: true, step_index: 3, container: {id: 'playlist-id', name: 'N', uids: ['a', 'b']}});

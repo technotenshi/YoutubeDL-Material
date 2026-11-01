@@ -16,13 +16,19 @@ export type DownloadSummary = {
     type: string;
     title: string;
     step_index: number;
-    percent_complete: number;
+    /**
+     * Null until the download step reports progress, then a string with two decimals (for example "42.50"), and the number 100 once the download has finished. These are the values the server stores.
+     */
+    percent_complete: (number | string) | null;
     timestamp_start: number;
     /**
      * True if the download has error text. Get the text from /api/download.
      */
     has_error: boolean;
-    sub_name?: string;
+    /**
+     * Name of the subscription the download came from. Null for a one-off download.
+     */
+    sub_name?: string | null;
     /**
      * Set once the download has finished. Only what opening the result in the player needs; a playlist has id and uids, a single file has uid and id.
      */
