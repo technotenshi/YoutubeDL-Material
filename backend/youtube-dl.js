@@ -40,8 +40,6 @@ const PYTHON_REQUIREMENTS = {
     ]
 };
 
-// the tags API is paged; stop after this many pages even if the list goes on
-const MAX_TAG_PAGES = 10;
 
 exports.runYoutubeDL = async (url, args, customDownloadHandler = null) => {
     let callback = null;
@@ -220,8 +218,11 @@ exports.getLatestUpdateVersion = async (youtubedl_fork) => {
         let tags_url = exports.youtubedl_forks[youtubedl_fork]['tags_url'];
         let newest_tag = null;
         let python_version = null;
-        // tags come newest first; look further back only while every release so far needs a newer Python
-        for (let page = 1; tags_url && page <= MAX_TAG_PAGES; page++) {
+        // tags come newest first; look further back only while every release so far needs a newer Python,
+        // until the list ends. A page that was already fetched is not fetched again, so a bad Link header cannot loop.
+        const fetched_urls = new Set();
+        for (let page = 1; tags_url && !fetched_urls.has(tags_url); page++) {
+            fetched_urls.add(tags_url);
             const res = await fetch(tags_url, {method: 'Get'});
             const tags = await res.json();
             if (!tags || !tags[0]) {

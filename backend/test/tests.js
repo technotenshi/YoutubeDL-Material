@@ -1167,6 +1167,7 @@ describe('Config', async function() {
     let broken_releases = null;
     let tags_down = false;
     let tag_pages = null;
+    let tags_link_loops = false;
     let download_hold_ms = 0;
     let in_flight = 0;
     let max_in_flight = 0;
@@ -1197,7 +1198,9 @@ describe('Config', async function() {
                 res.end('rate limited');
             } else if (tags_match) {
                 const page = Number(url.searchParams.get('page') || 1);
-                if (page < pages.length) res.setHeader('Link', `<${base_url}/tags/${tags_match[1]}?page=${page + 1}>; rel="next"`);
+                // normally the next page; a broken server can point back at the page it just served
+                if (tags_link_loops) res.setHeader('Link', `<${base_url}${req.url}>; rel="next"`);
+                else if (page < pages.length) res.setHeader('Link', `<${base_url}/tags/${tags_match[1]}?page=${page + 1}>; rel="next"`);
                 res.setHeader('Content-Type', 'application/json');
                 res.end(JSON.stringify((pages[page - 1] || []).map(name => ({name}))));
             } else if (release || url.pathname.startsWith('/latest/')) {
@@ -1246,6 +1249,7 @@ describe('Config', async function() {
         broken_releases = new Set();
         tags_down = false;
         tag_pages = null;
+        tags_link_loops = false;
         download_hold_ms = 0;
         in_flight = 0;
         max_in_flight = 0;
@@ -1308,6 +1312,24 @@ describe('Config', async function() {
             setPython('3.12.3');
             assert.strictEqual(await youtubedl_api.getLatestUpdateVersion('yt-dlp'), '2026.10.26');
             assert.deepStrictEqual(requested_paths, ['/tags/yt-dlp']);
+        });
+
+        it('Keeps going past any fixed number of pages until the list ends', async function() {
+            // eleven pages of incompatible releases, then a compatible one on page 12
+            tag_pages = [...Array(11).fill(['2026.10.26']), ['2026.10.21']];
+            setPython('3.10.12');
+            assert.strictEqual(await youtubedl_api.getLatestUpdateVersion('yt-dlp'), '2026.10.21');
+            assert.strictEqual(requested_paths.length, 12, requested_paths.join(', '));
+        });
+
+        it('Stops when a Link header points back at a page it already fetched', async function() {
+            tag_pages = [['2026.10.26']];
+            tags_link_loops = true;
+            setPython('3.10.12');
+            assert.strictEqual(await youtubedl_api.getLatestUpdateVersion('yt-dlp'), null);
+            assert.strictEqual(requested_paths.length, 1, requested_paths.join(', '));
+            const errors = log_lines.filter(line => line.startsWith('error:'));
+            assert(errors.some(line => line.includes('Python 3.10.12')), errors.join('\n'));
         });
 
         it('Reports that nothing fits when no page has a compatible release', async function() {
