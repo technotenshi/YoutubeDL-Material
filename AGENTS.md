@@ -54,6 +54,10 @@ Issues are tracked as GitHub Issues on `technotenshi/YoutubeDL-Material` using t
 
 Default vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
 
+### Priority labels
+
+Eisenhower Matrix priorities: `priority:do-now`, `priority:next`, `priority:schedule`, `priority:drop`. Set exactly one when creating or triaging an issue. See `docs/agents/priority-labels.md`.
+
 ### Domain docs
 
 Single-context: root `GLOSSARY.md` plus `docs/adr/`. See `docs/agents/domain.md`.
