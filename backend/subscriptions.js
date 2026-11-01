@@ -36,7 +36,8 @@ exports.subscribe = async (sub, user_uid = null, skip_get_info = false) => {
         await db_api.insertRecordIntoTable('subscriptions', JSON.parse(JSON.stringify(sub)));
 
         let success = skip_get_info ? true : await getSubscriptionInfo(sub);
-        exports.writeSubscriptionMetadata(sub);
+        // the folder is named after the subscription, which a failed lookup leaves without a name
+        if (sub.name) exports.writeSubscriptionMetadata(sub);
 
         if (success) {
             if (!sub.paused) exports.getVideosForSub(sub.id);
@@ -53,24 +54,33 @@ exports.subscribe = async (sub, user_uid = null, skip_get_info = false) => {
 
 async function getSubscriptionInfo(sub) {
     // get videos
-    let downloadConfig = ['--dump-json', '--playlist-end', '1'];
     let useCookies = config_api.getConfigItem('ytdl_use_cookies');
+    const cookieArgs = [];
     if (useCookies) {
         if (await fs.pathExists(path.join(__dirname, 'appdata', 'cookies.txt'))) {
-            downloadConfig.push('--cookies', path.join('appdata', 'cookies.txt'));
+            cookieArgs.push('--cookies', path.join('appdata', 'cookies.txt'));
         } else {
             logger.warn('Cookies file could not be found. You can either upload one, or disable \'use cookies\' in the Advanced tab in the settings.');
         }
     }
 
-    let {callback} = await youtubedl_api.runYoutubeDL(sub.url, downloadConfig);
-    const {parsed_output, err} = await callback;
-    if (err) {
-        logger.error(err.stderr);
-        return false;
+    // only the first video is needed, to learn the name
+    let {callback} = await youtubedl_api.runYoutubeDL(sub.url, ['--dump-json', '--playlist-end', '1', ...cookieArgs]);
+    let {parsed_output, err} = await callback;
+    let entries = recoverEntriesOfRun(parsed_output, err);
+    if (!entries) {
+        // --playlist-end 1 tries the first video only, so an unavailable first video leaves nothing to read.
+        // Ask for the first video that can be extracted instead.
+        logger.verbose(`Subscribe: could not get info from the first video of ${sub.url} (${describeFailedRun(err)}), trying the first video that can be extracted.`);
+        ({callback} = await youtubedl_api.runYoutubeDL(sub.url, ['--dump-json', '--max-downloads', '1', ...cookieArgs]));
+        ({parsed_output, err} = await callback);
+        entries = getEntriesOfRun(parsed_output, err, `getting info for ${sub.url}`, 'Subscribe: failed to get subscription info.');
+        if (!entries) {
+            return false;
+        }
     }
     logger.verbose('Subscribe: got info for subscription ' + sub.id);
-    for (const output_json of parsed_output) {
+    for (const output_json of entries) {
         if (!output_json) {
             continue;
         }
@@ -296,9 +306,8 @@ async function _getVideosForSub(sub) {
     updateSubscriptionProperty(sub, {child_process: child_process}, user_uid);
     const {parsed_output, err} = await callback;
     updateSubscriptionProperty(sub, {downloading: false, child_process: null}, user_uid);
-    if (!parsed_output) {
-        logger.error('Subscription check failed!');
-        if (err) logger.error(err);
+    const entries = getEntriesOfRun(parsed_output, err, `checking ${sub.name}`, 'Subscription check failed!');
+    if (!entries) {
         return null;
     }
 
@@ -310,7 +319,7 @@ async function _getVideosForSub(sub) {
     }
 
     logger.verbose('Subscription: finished check for ' + sub.name);
-    const files_to_download = await handleOutputJSON(parsed_output, sub, user_uid);
+    const files_to_download = await handleOutputJSON(entries, sub, user_uid);
     return files_to_download;
 }
 
@@ -592,6 +601,73 @@ async function checkVideoIfBetterExists(file_obj, sub, user_uid) {
 }
 
 // helper functions
+
+// yt-dlp exits with status 1 when any video of a playlist is private, removed or terminated, but it still
+// prints the entries it could extract. Returns those entries when the run ended that way. A run killed by a
+// signal (a cancelled check) or one that never started has nothing to trust, so it returns none.
+function getEntriesPrintedBeforeFailure(err) {
+    if (!err || typeof err !== 'object' || !(err.exitCode > 0) || typeof err.stdout !== 'string') {
+        return [];
+    }
+    const entries = [];
+    for (const line of err.stdout.split(/\r?\n/)) {
+        // there can be leading characters before the JSON, as in utils.parseOutputJSON
+        const start_idx = line.indexOf('{"');
+        if (start_idx === -1) continue;
+        try {
+            const entry = JSON.parse(line.slice(start_idx));
+            if (entry && typeof entry === 'object') entries.push(entry);
+        } catch (e) {
+            // not an entry
+        }
+    }
+    return entries;
+}
+
+// The last lines of yt-dlp's standard error, each cut short, for the log. Standard error can be long and hold signed media URLs.
+function summarizeStderr(stderr) {
+    const lines = (typeof stderr === 'string' ? stderr : '').split(/\r?\n/).filter(line => line.trim());
+    return lines.slice(-5).map(line => line.slice(0, 300)).join('\n');
+}
+
+// A short description of a failed run for the log: the exit code and the end of stderr. Not stdout, which
+// holds the entries.
+function describeFailedRun(err) {
+    const downloader = config_api.getConfigItem('ytdl_default_downloader');
+    // a run that exited 0 resolves with its standard error as a string, which the output parser can still reject
+    if (typeof err === 'string') return summarizeStderr(err);
+    if (!err || typeof err !== 'object') return String(err);
+    if (err.exitCode > 0) {
+        const stderr_summary = summarizeStderr(err.stderr);
+        return `${downloader} exited with code ${err.exitCode}` + (stderr_summary ? `:\n${stderr_summary}` : '.');
+    }
+    if (err.signal) return `${downloader} was ended by ${err.signal}.`;
+    return String(err.shortMessage || err.message || err);
+}
+
+// yt-dlp exits with this code when --max-downloads stopped it, which is how it is asked to stop, not an error
+const MAX_DOWNLOADS_REACHED = 101;
+
+// The entries of a yt-dlp run, or null when the run failed without printing any. Logs nothing.
+function recoverEntriesOfRun(parsed_output, err) {
+    if (parsed_output) return parsed_output;
+    const entries = getEntriesPrintedBeforeFailure(err);
+    return entries.length > 0 ? entries : null;
+}
+
+// The entries of a yt-dlp run, or null (after logging why) when the run failed without printing any.
+function getEntriesOfRun(parsed_output, err, doing, failure_message) {
+    const entries = recoverEntriesOfRun(parsed_output, err);
+    if (!entries) {
+        logger.error(`${failure_message} ${describeFailedRun(err)}`);
+        return null;
+    }
+    if (!parsed_output && err.exitCode !== MAX_DOWNLOADS_REACHED) {
+        const downloader = config_api.getConfigItem('ytdl_default_downloader');
+        logger.warn(`${downloader} exited with code ${err.exitCode} and reported errors while ${doing}. Continuing with the ${entries.length} ${entries.length === 1 ? 'entry' : 'entries'} it returned.`);
+    }
+    return entries;
+}
 
 function getAppendedBasePath(sub, base_path) {
     return path.join(base_path, (sub.isPlaylist ? 'playlists/' : 'channels/'), sub.name);
