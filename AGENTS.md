@@ -2,7 +2,7 @@
 
 ## Working agreements
 
-- Read `~/HARNESS.md` before planning multi-step work. Read `docs/DECISIONS.md` when present; record architectural or operational decisions there.
+- Read `~/HARNESS.md`, if present, before planning multi-step work. Read `docs/DECISIONS.md` when present; record architectural or operational decisions there.
 - Preserve uncommitted work. Destructive Git operations require explicit approval; add remotes or push only when asked.
 - Deployments, container restarts, DNS changes, and other infrastructure mutations require explicit approval in the current session.
 - Back up before material changes, keep scripts idempotent, and report verification actually performed. Validate Bash changes with `bash -n` and ShellCheck; use `set -Eeuo pipefail`, quote variables, and check installed CLI help before choosing syntax.
@@ -14,7 +14,7 @@ For library, framework, SDK, API, CLI, or cloud-service questions, use Context7 
 
 ## Fork context
 
-- This repository is a fork of `Tzahi12345/YoutubeDL-Material`; the configured `origin` is `technotenshi/YoutubeDL-Material`. An `upstream` remote (`https://github.com/Tzahi12345/YoutubeDL-Material.git`) tracks the original project's `master` only, with no tags. Check actual remotes before Git operations, and pass `--repo technotenshi/YoutubeDL-Material` to `gh` if its default repo is not the fork.
+- This repository is a fork of `Tzahi12345/YoutubeDL-Material`; the configured `origin` is `technotenshi/YoutubeDL-Material`. The `upstream` remote (`https://github.com/Tzahi12345/YoutubeDL-Material.git`) tracks the original project's `master` only, with no tags; if a clone lacks it, add it with `git remote add -t master upstream <url>`. Check actual remotes before Git operations, and pass `--repo technotenshi/YoutubeDL-Material` to `gh` if its default repo is not the fork.
 - Upstream URLs remain in release updating, README links, and container configuration. Preserve attribution and review these references when implementing fork-specific release behavior.
 - The in-app updater in `backend/app.js` downloads upstream releases and replaces application files. Account for that behavior when maintaining fork changes.
 
@@ -43,7 +43,18 @@ Consult `DEVELOPMENT.md`, both `package.json` files, `angular.json`, and `.githu
 - Match surrounding formatting when editing existing files; `.editorconfig` specifies spaces and two-space indentation, while several backend files use four spaces. Avoid unrelated formatting churn.
 - Keep runtime databases, cookies, downloaded media, logs, installed dependencies, and generated frontend output out of commits. Treat existing ignore rules as a starting point and inspect the final diff.
 
-Initialization scanned source and configuration only; dependencies were absent and builds/tests were not run.
+## CI and repository automation
+
+Workflows live in `.github/workflows/`; read the file before relying on a summary here.
+
+- On pull requests and pushes to `main`: `mocha.yml` (backend tests on Node 16), `codeql-analysis.yml`, `security.yml` (also weekly and manual). `build.yml` (frontend build) and `docker-pr.yml` (image build, no push) run only when files they list under `paths:` change.
+- `labeler.yml` labels pull requests from changed paths using `.github/labeler.yml` (`actions/labeler@v5`, `pull_request_target`). It only adds labels. Dependabot (`.github/dependabot.yml`) sets its own labels.
+- Not run on pull requests: `live-checks.yml` (weekly or manual, informational, calls real YouTube/Twitch/GitHub endpoints and never gates a merge), `docker.yml` (manual, publishes the development image), and `close-issue-if-noresponse.yml` (issue comments and hourly schedule). `docker-release.yml` is guarded to run only in the upstream repository.
+- `.github/copilot-instructions.md` holds review guidance for Copilot and points back here.
+
+## Security
+
+`SECURITY.md` is inherited from upstream. Its policy is that the app is meant for a LAN, not as a public instance, and it asks for vulnerabilities to be filed as issues. Its supported-versions table and release links describe upstream, not this fork.
 
 ## Agent skills
 
