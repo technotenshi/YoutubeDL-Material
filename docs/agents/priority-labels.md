@@ -23,22 +23,28 @@ If you cannot tell whether something is urgent or important, ask the maintainer 
 | Label               | Urgent | Important | What to do                                                        |
 | ------------------- | ------ | --------- | ----------------------------------------------------------------- |
 | `priority:do-now`   | yes    | yes       | Work on it first.                                                 |
-| `priority:next`     | yes    | no        | Work on it when no `priority:do-now` issue is open.               |
-| `priority:schedule` | no     | yes       | Plan it. Work on it when no `do-now` or `next` issue is open.     |
+| `priority:next`     | yes    | no        | Work on it when no actionable `do-now` issue exists.              |
+| `priority:schedule` | no     | yes       | Plan it. Work on it when no actionable `do-now` or `next` exists. |
 | `priority:drop`     | no     | no        | Close it, usually as `wontfix`, or leave it until it matters.     |
 
-Examples of `priority:drop`: log noise that hides nothing, platforms the fork does not run on, and reports with too little detail to act on.
+"Actionable" is defined under "Picking the next issue".
+
+Examples of `priority:drop`: log noise that hides nothing, and platforms the fork does not run on.
+
+Missing detail is not a reason to drop an issue. Label it `needs-info` and keep the priority its known facts support. If you cannot tell how urgent or important it is, ask the maintainer.
 
 ## Picking the next issue
 
-This project has one developer, so nobody else can take an issue. Work the open issues in this order:
+This project has one developer, so nobody else can take an issue. An issue is actionable when it is open, has no open blockers, is not `needs-info` or `needs-triage`, and the current worker can do it (an agent session takes `ready-for-agent`; the maintainer can take `ready-for-agent` or `ready-for-human`).
+
+Work the highest priority that has an actionable issue, in this order:
 
 1. `priority:do-now`
 2. `priority:next`
 3. `priority:schedule`
 4. `priority:drop` (normally closed, not worked)
 
-Within one priority, prefer issues that are `ready-for-agent` or `ready-for-human` over `needs-triage` or `needs-info`, and an issue with no open blockers over one that is blocked.
+A blocked or waiting issue never holds up lower priorities. If every `do-now` issue is blocked or waiting, move on to `next`, and so on. Say which issues were skipped and why.
 
 ## Applying
 
