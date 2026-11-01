@@ -22,9 +22,17 @@ exports.youtubedl_forks = {
     },
     'yt-dlp': {
         'download_url': 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp',
+        'versioned_download_url': 'https://github.com/yt-dlp/yt-dlp/releases/download/{version}/yt-dlp',
         'tags_url': 'https://api.github.com/repos/yt-dlp/yt-dlp/tags'
     }
 }
+
+// The oldest Python each release needs, for forks whose downloaded file runs on the system Python.
+// A release must satisfy every entry whose `since` it is at or after. Forks not listed have no limit.
+const PYTHON_REQUIREMENTS = {
+    // 2026.10.26 removed Python 3.10 support
+    'yt-dlp': [{since: '2026.10.26', min_python: [3, 11]}]
+};
 
 exports.runYoutubeDL = async (url, args, customDownloadHandler = null) => {
     let callback = null;
@@ -88,8 +96,8 @@ exports.checkForYoutubeDLUpdate = async () => {
     const selected_fork = config_api.getConfigItem('ytdl_default_downloader');
     const output_file_path = getYoutubeDLPath();
     // get current version
-    let current_app_details_exists = fs.existsSync(CONSTS.DETAILS_BIN_PATH);
-    if (!current_app_details_exists[selected_fork]) {
+    let current_app_details_exists = fs.existsSync(CONSTS.DETAILS_BIN_PATH) && !!fs.readJSONSync(CONSTS.DETAILS_BIN_PATH)[selected_fork];
+    if (!current_app_details_exists) {
         logger.warn(`Failed to get youtube-dl binary details at location '${CONSTS.DETAILS_BIN_PATH}'. Generating file...`);
         updateDetailsJSON(CONSTS.OUTDATED_YOUTUBEDL_VERSION, selected_fork, output_file_path);
     }
@@ -114,10 +122,17 @@ exports.updateYoutubeDL = async (latest_update_version, custom_output_path = nul
 
 async function downloadLatestYoutubeDLBinaryGeneric(youtubedl_fork, new_version, custom_output_path = null) {
     const file_ext = is_windows ? '.exe' : '';
+    const fork_details = exports.youtubedl_forks[youtubedl_fork];
+    const output_path = custom_output_path || getYoutubeDLPath(youtubedl_fork);
+
+    // forks with a release-specific URL are installed as exactly the release that was asked for, and only if it runs
+    if (fork_details['versioned_download_url']) {
+        await installVerifiedBinary(youtubedl_fork, new_version, output_path);
+        return;
+    }
 
     // build the URL
-    const download_url = `${exports.youtubedl_forks[youtubedl_fork]['download_url']}${file_ext}`;
-    const output_path = custom_output_path || getYoutubeDLPath(youtubedl_fork);
+    const download_url = `${fork_details['download_url']}${file_ext}`;
 
     try {
         await utils.fetchFile(download_url, output_path, `${youtubedl_fork} ${new_version}`);
@@ -131,6 +146,29 @@ async function downloadLatestYoutubeDLBinaryGeneric(youtubedl_fork, new_version,
     }
 } 
 
+// Downloads a release to a temporary file next to the real one and runs it once to print its version.
+// Only a binary that ran is moved into place, so a working binary is never replaced by one that cannot run.
+async function installVerifiedBinary(youtubedl_fork, release, output_path) {
+    const file_ext = is_windows ? '.exe' : '';
+    const fork_details = exports.youtubedl_forks[youtubedl_fork];
+    const download_url = `${release ? fork_details['versioned_download_url'].replace('{version}', release) : fork_details['download_url']}${file_ext}`;
+    const temp_path = `${output_path}.download`;
+
+    try {
+        await utils.fetchFile(download_url, temp_path, `${youtubedl_fork} ${release}`);
+        await fs.chmod(temp_path, 0o777);
+        await execa(path.resolve(temp_path), ['--version'], {timeout: 60000});
+        await fs.move(temp_path, output_path, {overwrite: true});
+        updateDetailsJSON(release, youtubedl_fork, output_path);
+    } catch (e) {
+        const python_version = await getPythonVersion(youtubedl_fork);
+        logger.error(`Failed to install ${youtubedl_fork} ${release || 'latest'} on Python ${python_version ? python_version.join('.') : 'of unknown version'}: ${e.shortMessage || e.message}. ` +
+                     `The existing ${youtubedl_fork} binary was kept.`);
+    } finally {
+        await fs.remove(temp_path);
+    }
+}
+
 exports.getLatestUpdateVersion = async (youtubedl_fork) => {
     const tags_url = exports.youtubedl_forks[youtubedl_fork]['tags_url'];
     return new Promise(resolve => {
@@ -142,8 +180,18 @@ exports.getLatestUpdateVersion = async (youtubedl_fork) => {
                 resolve(null);
                 return;
             }
-            const latest_update_version = json[0]['name'];
-            resolve(latest_update_version);
+            const python_version = await getPythonVersion(youtubedl_fork);
+            const compatible_tag = json.find(tag => isRunnableOnPython(youtubedl_fork, tag['name'], python_version));
+            if (!compatible_tag) {
+                logger.error(`No ${youtubedl_fork} release found that runs on Python ${python_version.join('.')}.`);
+                resolve(null);
+                return;
+            }
+            if (compatible_tag !== json[0]) {
+                logger.warn(`${youtubedl_fork} updates are held back to ${compatible_tag['name']} because this container runs Python ${python_version.join('.')}. ` +
+                            `Newer releases, such as ${json[0]['name']}, need a newer Python.`);
+            }
+            resolve(compatible_tag['name']);
         })
         .catch(err => {
             logger.error(`Failed to check ${youtubedl_fork} version for an update.`)
@@ -151,6 +199,39 @@ exports.getLatestUpdateVersion = async (youtubedl_fork) => {
             resolve(null);
         });
     });
+}
+
+// Python version that runs the downloaded zipapp, as [major, minor, patch], or null when it cannot be told.
+// The Windows yt-dlp.exe bundles its own Python, so the system one does not matter there.
+async function getPythonVersion(youtubedl_fork) {
+    if (!PYTHON_REQUIREMENTS[youtubedl_fork] || is_windows) return null;
+    try {
+        const {stdout} = await execa('python3', ['--version']);
+        const match = stdout.match(/Python (\d+)\.(\d+)(?:\.(\d+))?/);
+        return match ? [Number(match[1]), Number(match[2]), Number(match[3] || 0)] : null;
+    } catch (e) {
+        logger.warn(`Could not determine the Python version that runs ${youtubedl_fork}: ${e.shortMessage || e.message}`);
+        return null;
+    }
+}
+
+function isRunnableOnPython(youtubedl_fork, release, python_version) {
+    const requirements = PYTHON_REQUIREMENTS[youtubedl_fork];
+    if (!requirements || !python_version) return true;
+    const applicable = requirements.filter(requirement => compareVersions(release, requirement.since) >= 0);
+    return applicable.every(requirement => compareVersions(python_version, requirement.min_python) >= 0);
+}
+
+// compares dotted versions (as strings or arrays of numbers) part by part, e.g. '2026.10.26' vs '2026.10.21'
+function compareVersions(a, b) {
+    const to_parts = (version) => Array.isArray(version) ? version : String(version).split('.').map(Number);
+    const parts_a = to_parts(a);
+    const parts_b = to_parts(b);
+    for (let i = 0; i < Math.max(parts_a.length, parts_b.length); i++) {
+        const diff = (parts_a[i] || 0) - (parts_b[i] || 0);
+        if (diff !== 0) return Math.sign(diff);
+    }
+    return 0;
 }
 
 function updateDetailsJSON(new_version, fork, output_path) {

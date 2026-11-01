@@ -1149,6 +1149,207 @@ describe('Config', async function() {
     });
 });
 
+describe('yt-dlp binary updates', function() {
+    // A local HTTP server stands in for GitHub, so the real fetch and file code runs offline.
+    // The container's Python is simulated with a stub `python3` first on PATH.
+    const os = require('os');
+    const http = require('http');
+    const { execFileSync } = require('child_process');
+    const app_logger = require('../logger');
+    const CONSTS = require('../consts');
+
+    const yt_dlp_tags = ['2026.10.26', '2026.10.21', '2026.08.19'];
+    let server = null;
+    let base_url = null;
+    let work_dir = null;
+    let requested_paths = null;
+    let broken_releases = null;
+    let log_lines = null;
+    let saved = null;
+
+    const setPython = (version) => {
+        fs.writeFileSync(path.join(work_dir, 'bin', 'python3'), `#!/bin/sh\necho "Python ${version}"\n`, {mode: 0o755});
+    };
+
+    const fakeBinary = (version) => broken_releases.has(version)
+        ? '#!/bin/sh\necho "ImportError: this release does not run here" >&2\nexit 1\n'
+        : `#!/bin/sh\necho "${version}"\n`;
+
+    before(async function() {
+        server = http.createServer((req, res) => {
+            requested_paths.push(req.url);
+            const tags_match = req.url.match(/^\/tags\/(.+)$/);
+            const download_match = req.url.match(/^\/download\/([^/]+)\/(.+)$/);
+            if (tags_match) {
+                // every fork gets the same tag list, newest first (as the GitHub tags API returns it)
+                res.end(JSON.stringify(yt_dlp_tags.map(name => ({name}))));
+            } else if (download_match) {
+                res.end(fakeBinary(download_match[1]));
+            } else if (req.url.startsWith('/latest/')) {
+                res.end(fakeBinary('latest'));
+            } else {
+                res.statusCode = 404;
+                res.end();
+            }
+        });
+        await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+        base_url = `http://127.0.0.1:${server.address().port}`;
+        work_dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ytdl-update-'));
+        fs.mkdirSync(path.join(work_dir, 'bin'));
+
+        const binary_path = path.join('appdata', 'bin', 'yt-dlp');
+        saved = {
+            forks: JSON.parse(JSON.stringify(youtubedl_api.youtubedl_forks)),
+            path_env: process.env.PATH,
+            fork: config_api.getConfigItem('ytdl_default_downloader'),
+            details: fs.existsSync(CONSTS.DETAILS_BIN_PATH) ? fs.readFileSync(CONSTS.DETAILS_BIN_PATH) : null,
+            binary: fs.existsSync(binary_path) ? fs.readFileSync(binary_path) : null,
+            logger_methods: {warn: app_logger.warn, error: app_logger.error, info: app_logger.info}
+        };
+        for (const fork in youtubedl_api.youtubedl_forks) {
+            youtubedl_api.youtubedl_forks[fork]['tags_url'] = `${base_url}/tags/${fork}`;
+            youtubedl_api.youtubedl_forks[fork]['download_url'] = `${base_url}/latest/${fork}`;
+        }
+        youtubedl_api.youtubedl_forks['yt-dlp']['versioned_download_url'] = `${base_url}/download/{version}/yt-dlp`;
+        process.env.PATH = `${path.join(work_dir, 'bin')}${path.delimiter}${process.env.PATH}`;
+    });
+
+    beforeEach(function() {
+        requested_paths = [];
+        broken_releases = new Set();
+        log_lines = [];
+        for (const level of ['warn', 'error', 'info']) {
+            app_logger[level] = (message) => { log_lines.push(`${level}: ${message}`); };
+        }
+        config_api.setConfigItem('ytdl_default_downloader', 'yt-dlp');
+    });
+
+    afterEach(function() {
+        Object.assign(app_logger, saved.logger_methods);
+    });
+
+    after(async function() {
+        if (!saved) return;
+        await new Promise(resolve => server.close(resolve));
+        Object.assign(app_logger, saved.logger_methods);
+        process.env.PATH = saved.path_env;
+        Object.assign(youtubedl_api.youtubedl_forks, saved.forks);
+        config_api.setConfigItem('ytdl_default_downloader', saved.fork);
+        const binary_path = path.join('appdata', 'bin', 'yt-dlp');
+        if (saved.details) fs.writeFileSync(CONSTS.DETAILS_BIN_PATH, saved.details);
+        else fs.removeSync(CONSTS.DETAILS_BIN_PATH);
+        if (saved.binary) fs.writeFileSync(binary_path, saved.binary, {mode: 0o755});
+        else fs.removeSync(binary_path);
+        fs.removeSync(work_dir);
+    });
+
+    describe('Choosing the release', function() {
+        it('Python 3.10 gets the newest release that still supports it', async function() {
+            setPython('3.10.12');
+            assert.strictEqual(await youtubedl_api.getLatestUpdateVersion('yt-dlp'), '2026.10.21');
+        });
+
+        it('Python 3.11 and newer get the newest release', async function() {
+            for (const python_version of ['3.11.0', '3.12.3']) {
+                setPython(python_version);
+                assert.strictEqual(await youtubedl_api.getLatestUpdateVersion('yt-dlp'), '2026.10.26');
+            }
+        });
+
+        it('youtube-dl and youtube-dlc ignore the Python version', async function() {
+            setPython('3.10.12');
+            assert.strictEqual(await youtubedl_api.getLatestUpdateVersion('youtube-dl'), '2026.10.26');
+            assert.strictEqual(await youtubedl_api.getLatestUpdateVersion('youtube-dlc'), '2026.10.26');
+        });
+
+        it('Says plainly that updates are held back because of the Python version', async function() {
+            setPython('3.10.12');
+            await youtubedl_api.getLatestUpdateVersion('yt-dlp');
+            const held_back = log_lines.filter(line => line.includes('held back'));
+            assert.strictEqual(held_back.length, 1);
+            // names the Python version, the release that is installed and the newer one that is skipped
+            for (const detail of ['Python 3.10.12', '2026.10.21', '2026.10.26']) assert(held_back[0].includes(detail), held_back[0]);
+        });
+
+        it('Stays quiet when nothing is held back', async function() {
+            setPython('3.12.3');
+            await youtubedl_api.getLatestUpdateVersion('yt-dlp');
+            assert.deepStrictEqual(log_lines.filter(line => line.includes('held back')), []);
+        });
+    });
+
+    describe('Installing the release', function() {
+        const readDetails = () => fs.readJSONSync(CONSTS.DETAILS_BIN_PATH);
+
+        it('Downloads the requested release, not the newest one, and records it', async function() {
+            setPython('3.10.12');
+            const binary_path = path.join(work_dir, 'yt-dlp');
+            await youtubedl_api.updateYoutubeDL('2026.10.21', binary_path);
+            assert(requested_paths.includes('/download/2026.10.21/yt-dlp'), requested_paths.join(', '));
+            assert(!requested_paths.some(url => url.startsWith('/latest/')), requested_paths.join(', '));
+            assert.strictEqual(execFileSync(binary_path, ['--version']).toString().trim(), '2026.10.21');
+            assert.strictEqual(readDetails()['yt-dlp']['version'], '2026.10.21');
+            // the verified download was moved into place, nothing is left beside it
+            assert.deepStrictEqual(fs.readdirSync(work_dir).sort(), ['bin', 'yt-dlp']);
+        });
+
+        describe('when the download cannot run', function() {
+            const previous_script = '#!/bin/sh\necho "2026.10.21"\n';
+
+            const installPrevious = (binary_path, version) => {
+                fs.ensureDirSync(path.dirname(binary_path));
+                fs.writeFileSync(binary_path, `#!/bin/sh\necho "${version}"\n`, {mode: 0o755});
+                fs.writeJSONSync(CONSTS.DETAILS_BIN_PATH, {'yt-dlp': {version: version, downloader: 'yt-dlp'}});
+            };
+
+            it('Keeps the previous binary and its recorded version, and logs the Python version and release', async function() {
+                setPython('3.10.12');
+                const binary_path = path.join(work_dir, 'yt-dlp');
+                installPrevious(binary_path, '2026.10.21');
+                broken_releases.add('2026.10.26');
+
+                await youtubedl_api.updateYoutubeDL('2026.10.26', binary_path);
+
+                assert.strictEqual(fs.readFileSync(binary_path, 'utf8'), previous_script);
+                assert.strictEqual(readDetails()['yt-dlp']['version'], '2026.10.21');
+                assert.deepStrictEqual(fs.readdirSync(work_dir).sort(), ['bin', 'yt-dlp']);
+                const errors = log_lines.filter(line => line.startsWith('error:'));
+                assert.strictEqual(errors.length, 1, errors.join('\n'));
+                for (const detail of ['Python 3.10.12', '2026.10.26']) assert(errors[0].includes(detail), errors[0]);
+            });
+
+            it('An update check does not replace a working binary with one that cannot run', async function() {
+                setPython('3.12.3');
+                const binary_path = path.join('appdata', 'bin', 'yt-dlp');
+                installPrevious(binary_path, '2026.10.21');
+                broken_releases.add('2026.10.26');
+
+                await youtubedl_api.checkForYoutubeDLUpdate();
+
+                assert(requested_paths.includes('/download/2026.10.26/yt-dlp'), requested_paths.join(', '));
+                assert.strictEqual(fs.readFileSync(binary_path, 'utf8'), previous_script);
+                assert.strictEqual(readDetails()['yt-dlp']['version'], '2026.10.21');
+            });
+        });
+
+        it('An update check on Python 3.10 swaps a binary that cannot run for the newest one that can', async function() {
+            setPython('3.10.12');
+            const binary_path = path.join('appdata', 'bin', 'yt-dlp');
+            // the state of the outage: the newest release is installed, and does not run here
+            fs.ensureDirSync(path.dirname(binary_path));
+            fs.writeFileSync(binary_path, fakeBinary('2026.10.26'), {mode: 0o755});
+            fs.writeJSONSync(CONSTS.DETAILS_BIN_PATH, {'yt-dlp': {version: '2026.10.26', downloader: 'yt-dlp'}});
+            broken_releases.add('2026.10.26');
+
+            await youtubedl_api.checkForYoutubeDLUpdate();
+
+            assert.strictEqual(execFileSync(binary_path, ['--version']).toString().trim(), '2026.10.21');
+            assert.strictEqual(readDetails()['yt-dlp']['version'], '2026.10.21');
+            assert(!requested_paths.includes('/download/2026.10.26/yt-dlp'), requested_paths.join(', '));
+        });
+    });
+});
+
 const generateEmptyVideoFile = async (file_path) => {
     if (fs.existsSync(file_path)) fs.unlinkSync(file_path);
     return await exec(`ffmpeg -t 1 -f lavfi -i color=c=black:s=640x480 -c:v libx264 -tune stillimage -pix_fmt yuv420p "${file_path}"`);
