@@ -14,7 +14,7 @@ For library, framework, SDK, API, CLI, or cloud-service questions, use Context7 
 
 ## Fork context
 
-- This repository is a fork of `Tzahi12345/YoutubeDL-Material`; the configured `origin` is `technotenshi/YoutubeDL-Material`. Check actual remotes before Git operations; an `upstream` remote is not configured at initialization.
+- This repository is a fork of `Tzahi12345/YoutubeDL-Material`; the configured `origin` is `technotenshi/YoutubeDL-Material`. An `upstream` remote (`https://github.com/Tzahi12345/YoutubeDL-Material.git`) tracks the original project's `master` only, with no tags. Check actual remotes before Git operations, and pass `--repo technotenshi/YoutubeDL-Material` to `gh` if its default repo is not the fork.
 - Upstream URLs remain in release updating, README links, and container configuration. Preserve attribution and review these references when implementing fork-specific release behavior.
 - The in-app updater in `backend/app.js` downloads upstream releases and replaces application files. Account for that behavior when maintaining fork changes.
 
@@ -56,4 +56,4 @@ Default vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-
 
 ### Domain docs
 
-Single-context: root `CONTEXT.md` plus `docs/adr/`. See `docs/agents/domain.md`.
+Single-context: root `GLOSSARY.md` plus `docs/adr/`. See `docs/agents/domain.md`.
