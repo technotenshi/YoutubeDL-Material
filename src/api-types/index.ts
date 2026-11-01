@@ -40,6 +40,7 @@ export type { DownloadArchiveRequest } from './models/DownloadArchiveRequest';
 export type { DownloadFileRequest } from './models/DownloadFileRequest';
 export type { DownloadRequest } from './models/DownloadRequest';
 export type { DownloadResponse } from './models/DownloadResponse';
+export type { DownloadSummary } from './models/DownloadSummary';
 export type { DownloadTwitchChatByVODIDRequest } from './models/DownloadTwitchChatByVODIDRequest';
 export type { DownloadTwitchChatByVODIDResponse } from './models/DownloadTwitchChatByVODIDResponse';
 export type { DownloadVideosForSubscriptionRequest } from './models/DownloadVideosForSubscriptionRequest';

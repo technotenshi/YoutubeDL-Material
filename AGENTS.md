@@ -22,6 +22,7 @@ For library, framework, SDK, API, CLI, or cloud-service questions, use Context7 
 
 - `src/app/`: Angular 15 / Angular Material frontend. `app-routing.module.ts` defines hash routes; `posts.services.ts` centralizes API requests, shared state, and route guarding.
 - `backend/app.js`: Express application, API routes, startup, static frontend serving, and application updates.
+- `backend/routes/downloads.js`: the downloads list and single-download request handlers, split out of `app.js` so tests can call them without starting the app.
 - `backend/downloader.js`: download queue and lifecycle; `backend/youtube-dl.js`: downloader binaries and invocation.
 - `backend/db.js`: local JSON/lowdb and MongoDB storage; `backend/authentication/auth.js`: authentication. Subscriptions, tasks, files, archives, categories, notifications, and Twitch support have adjacent modules.
 - `Public API v1.yaml`: API schema. `src/api-types/` contains generated models; update the schema and regenerate models for contract changes rather than editing generated types alone.

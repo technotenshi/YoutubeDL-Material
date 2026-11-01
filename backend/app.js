@@ -23,6 +23,7 @@ const session = require('express-session');
 const logger = require('./logger');
 const config_api = require('./config.js');
 const downloader_api = require('./downloader');
+const downloads_routes = require('./routes/downloads');
 const tasks_api = require('./tasks');
 const subscriptions_api = require('./subscriptions');
 const categories_api = require('./categories');
@@ -1625,27 +1626,9 @@ app.get('/api/thumbnail/:path', optionalJwt, async (req, res) => {
 
 // Downloads management
 
-app.post('/api/downloads', optionalJwt, async (req, res) => {
-    const user_uid = req.isAuthenticated() ? req.user.uid : null;
-    const uids = req.body.uids;
-    let downloads = await db_api.getRecords('download_queue', {user_uid: user_uid});
+app.post('/api/downloads', optionalJwt, downloads_routes.listDownloads);
 
-    if (uids) downloads = downloads.filter(download => uids.includes(download['uid']));
-
-    res.send({downloads: downloads});
-});
-
-app.post('/api/download', optionalJwt, async (req, res) => {
-    const download_uid = req.body.download_uid;
-
-    const download = await db_api.getRecord('download_queue', {uid: download_uid});
-
-    if (download) {
-        res.send({download: download});
-    } else {
-        res.send({download: null});
-    }
-});
+app.post('/api/download', optionalJwt, downloads_routes.getDownload);
 
 app.post('/api/clearDownloads', optionalJwt, async (req, res) => {
     const user_uid = req.isAuthenticated() ? req.user.uid : null;

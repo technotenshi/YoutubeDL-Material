@@ -2,8 +2,8 @@
 /* tslint:disable */
 /* eslint-disable */
 
-import type { Download } from './Download';
+import type { DownloadSummary } from './DownloadSummary';
 
 export type GetAllDownloadsResponse = {
-    downloads?: Array<Download>;
+    downloads?: Array<DownloadSummary>;
 };
