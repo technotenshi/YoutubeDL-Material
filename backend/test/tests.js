@@ -641,6 +641,7 @@ describe('Downloader', function() {
         const expected_args3 =  ['-o', '%(title)s.%(ext)s', '--min-filesize', '1'];
         assert(JSON.stringify(updated_args3) === JSON.stringify(expected_args3));
     });
+
     describe('Scheduler', function() {
         const scheduler_logger = require('../logger');
         const tick = () => new Promise(resolve => setImmediate(resolve));
@@ -653,6 +654,7 @@ describe('Downloader', function() {
         let original_get_records, original_collect_info, original_download_queued_file, original_logger_error;
         let original_max_concurrent;
         let reads;        // result of every download_queue read, in order
+        let read_filters; // filter argument of every download_queue read, in order
         let dispatched;   // [stage, uid] for every stage the scheduler started
         let next_read_hook;
         let release_held_read;
@@ -714,6 +716,7 @@ describe('Downloader', function() {
         beforeEach(async function() {
             await db_api.removeAllRecords('download_queue');
             reads = [];
+            read_filters = [];
             dispatched = [];
             next_read_hook = null;
             release_held_read = null;
@@ -723,12 +726,13 @@ describe('Downloader', function() {
             db_api.getRecords = async (table, ...rest) => {
                 const live = await original_get_records(table, ...rest);
                 if (table !== 'download_queue') return live;
+                read_filters.push(rest[0]);
                 // the local DB returns its live record objects; a MongoDB read returns an independent snapshot
                 const result = JSON.parse(JSON.stringify(live));
                 reads.push(result);
                 const hook = next_read_hook;
                 next_read_hook = null;
-                if (hook) await hook(result);
+                if (hook) await hook();
                 return result;
             };
 
@@ -765,9 +769,18 @@ describe('Downloader', function() {
                 await downloader_api.checkDownloads();
 
                 assert.strictEqual(reads.length, 1);
+                assert.deepStrictEqual(read_filters, [{finished: false}]);
                 assert.strictEqual(reads[0].length, 3);
                 assert(reads[0].every(record => record['finished'] === false));
                 assert.deepStrictEqual(dispatched.map(entry => entry[1]), waiting.map(record => record['uid']));
+            });
+        });
+
+        describe('Records the scheduler relies on', function() {
+            it('createDownload writes an explicit finished: false', async function() {
+                const created = await downloader_api.createDownload(url, 'video', {}, null, null, null, null, true);
+                const stored = await db_api.getRecord('download_queue', {uid: created['uid']});
+                assert.strictEqual(stored['finished'], false);
             });
         });
 
@@ -935,15 +948,40 @@ describe('Downloader', function() {
                 const hold = holdNextRead();
                 const pass = downloader_api.checkDownloads();
                 await hold.started;
-                const creating = downloader_api.createDownload(url, 'video', {}, null, null, null, null, true);
+                const creating = downloader_api.createDownload(url, 'video', {});
                 for (let i = 0; i < 20; i++) await tick();
                 hold.release();
                 await pass;
-                await creating;
+                const created = await creating;
 
                 const reads_before = reads.length;
                 await downloader_api.checkDownloads();
                 assert.strictEqual(reads.length, reads_before + 1, 'the pass after create must read the queue');
+                assert.deepStrictEqual(dispatched, [['collectInfo', created['uid']]]);
+            });
+
+            it('does not release the queue lock before a resume has been written', async function() {
+                // MongoDB applies the update some time after the call; the local DB applies it at once
+                const paused = queueRecord({paused: true});
+                await seed([paused]);
+                await wakeScheduler();
+
+                const original_update_record = db_api.updateRecord;
+                db_api.updateRecord = async (...args) => {
+                    for (let i = 0; i < 5; i++) await tick();
+                    return await original_update_record(...args);
+                };
+                try {
+                    const resuming = downloader_api.resumeDownload(paused['uid']);
+                    const pass = downloader_api.checkDownloads();
+                    await Promise.all([resuming, pass]);
+                } finally {
+                    db_api.updateRecord = original_update_record;
+                }
+
+                // the stubbed steps leave the record waiting, so a pass may start it more than once
+                await downloader_api.checkDownloads();
+                assert(dispatched.some(entry => entry[1] === paused['uid']), 'the resumed download was never started');
             });
 
             it('keeps the wake-up of a download resumed while an all-paused read is in flight', async function() {
