@@ -17,9 +17,11 @@ RUN sh ./fetch-twitchdownloader.sh
 FROM node:${NODE_VERSION}-slim AS node
 
 
-# Create our Ubuntu 22.04 with node
-# Go to 20.04
-FROM ubuntu:22.04 AS base
+# Create our Ubuntu 24.04 with node
+# 24.04 ships Python 3.12, which current yt-dlp needs (3.11 or newer). The utils stage above stays on
+# 22.04: it only fetches static binaries, and the live-checks workflow runs the same fetch script
+# on an ubuntu-22.04 runner.
+FROM ubuntu:24.04 AS base
 ARG TARGETPLATFORM
 ARG DEBIAN_FRONTEND=noninteractive
 ARG NODE_VERSION
@@ -32,9 +34,11 @@ ENV ALLOW_CONFIG_MUTATIONS=true
 ENV npm_config_cache=/app/.npm
 
 ENV NODE_VERSION=${NODE_VERSION}
-RUN groupadd -g $GID $USER && useradd --system -m -g $USER --uid $UID $USER && \
+# Ubuntu 24.04 images ship an "ubuntu" user and group on UID/GID 1000, so remove them first
+RUN if id ubuntu >/dev/null 2>&1; then userdel -r ubuntu; fi && \
+    groupadd -g $GID $USER && useradd --system -m -g $USER --uid $UID $USER && \
     apt update && \
-    apt install -y --no-install-recommends curl ca-certificates tzdata libicu70 libatomic1 && \
+    apt install -y --no-install-recommends curl ca-certificates tzdata libicu74 libatomic1 && \
     apt clean && \
     rm -rf /var/lib/apt/lists/*
 
@@ -86,7 +90,9 @@ RUN npm install -g pm2@6.0.14 && \
     rm -rf /app/.npm && \
     apt update && \
     apt install -y --no-install-recommends gosu python3-minimal python-is-python3 python3-pip atomicparsley build-essential && \
-    pip install pycryptodomex==3.24.1 && \
+    # Ubuntu 24.04 marks its Python as externally managed (PEP 668); this container has one purpose, and
+    # yt-dlp runs on the system python3, so the package goes there rather than into a virtualenv
+    pip install --break-system-packages pycryptodomex==3.24.1 && \
     apt remove -y --purge build-essential && \
     apt autoremove -y --purge && \
     apt clean && \
