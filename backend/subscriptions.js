@@ -54,21 +54,30 @@ exports.subscribe = async (sub, user_uid = null, skip_get_info = false) => {
 
 async function getSubscriptionInfo(sub) {
     // get videos
-    let downloadConfig = ['--dump-json', '--playlist-end', '1'];
     let useCookies = config_api.getConfigItem('ytdl_use_cookies');
+    const cookieArgs = [];
     if (useCookies) {
         if (await fs.pathExists(path.join(__dirname, 'appdata', 'cookies.txt'))) {
-            downloadConfig.push('--cookies', path.join('appdata', 'cookies.txt'));
+            cookieArgs.push('--cookies', path.join('appdata', 'cookies.txt'));
         } else {
             logger.warn('Cookies file could not be found. You can either upload one, or disable \'use cookies\' in the Advanced tab in the settings.');
         }
     }
 
-    let {callback} = await youtubedl_api.runYoutubeDL(sub.url, downloadConfig);
-    const {parsed_output, err} = await callback;
-    const entries = getEntriesOfRun(parsed_output, err, `getting info for ${sub.url}`, 'Subscribe: failed to get subscription info.');
+    // only the first video is needed, to learn the name
+    let {callback} = await youtubedl_api.runYoutubeDL(sub.url, ['--dump-json', '--playlist-end', '1', ...cookieArgs]);
+    let {parsed_output, err} = await callback;
+    let entries = recoverEntriesOfRun(parsed_output, err);
     if (!entries) {
-        return false;
+        // --playlist-end 1 tries the first video only, so an unavailable first video leaves nothing to read.
+        // Ask for the first video that can be extracted instead.
+        logger.verbose(`Subscribe: could not get info from the first video of ${sub.url} (${describeFailedRun(err)}), trying the first video that can be extracted.`);
+        ({callback} = await youtubedl_api.runYoutubeDL(sub.url, ['--dump-json', '--max-downloads', '1', ...cookieArgs]));
+        ({parsed_output, err} = await callback);
+        entries = getEntriesOfRun(parsed_output, err, `getting info for ${sub.url}`, 'Subscribe: failed to get subscription info.');
+        if (!entries) {
+            return false;
+        }
     }
     logger.verbose('Subscribe: got info for subscription ' + sub.id);
     for (const output_json of entries) {
@@ -636,17 +645,27 @@ function describeFailedRun(err) {
     return String(err.shortMessage || err.message || err);
 }
 
+// yt-dlp exits with this code when --max-downloads stopped it, which is how it is asked to stop, not an error
+const MAX_DOWNLOADS_REACHED = 101;
+
+// The entries of a yt-dlp run, or null when the run failed without printing any. Logs nothing.
+function recoverEntriesOfRun(parsed_output, err) {
+    if (parsed_output) return parsed_output;
+    const entries = getEntriesPrintedBeforeFailure(err);
+    return entries.length > 0 ? entries : null;
+}
+
 // The entries of a yt-dlp run, or null (after logging why) when the run failed without printing any.
 function getEntriesOfRun(parsed_output, err, doing, failure_message) {
-    if (parsed_output) return parsed_output;
-
-    const entries = getEntriesPrintedBeforeFailure(err);
-    if (entries.length === 0) {
+    const entries = recoverEntriesOfRun(parsed_output, err);
+    if (!entries) {
         logger.error(`${failure_message} ${describeFailedRun(err)}`);
         return null;
     }
-    const downloader = config_api.getConfigItem('ytdl_default_downloader');
-    logger.warn(`${downloader} exited with code ${err.exitCode} and reported errors while ${doing}. Continuing with the ${entries.length} ${entries.length === 1 ? 'entry' : 'entries'} it returned.`);
+    if (!parsed_output && err.exitCode !== MAX_DOWNLOADS_REACHED) {
+        const downloader = config_api.getConfigItem('ytdl_default_downloader');
+        logger.warn(`${downloader} exited with code ${err.exitCode} and reported errors while ${doing}. Continuing with the ${entries.length} ${entries.length === 1 ? 'entry' : 'entries'} it returned.`);
+    }
     return entries;
 }
 

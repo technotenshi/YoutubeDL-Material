@@ -806,14 +806,24 @@ describe('Subscriptions', function() {
         paused: true
     });
 
-    const stubYoutubeDL = ({entries = [], stdout_text = '', stderr = '', exit_code = 0, killed_by_signal = false}) => {
+    // `with_max_downloads` is what yt-dlp does when called with --max-downloads 1 instead: it skips the
+    // unavailable video, prints the first entry it can extract and exits 101 (recorded in test/fixtures/README.md)
+    const stubYoutubeDL = ({entries = [], stdout_text = '', stderr = '', exit_code = 0, killed_by_signal = false, with_max_downloads = null}) => {
         const stdout_path = path.join(work_dir, 'stdout.txt');
         const stderr_path = path.join(work_dir, 'stderr.txt');
         fs.writeFileSync(stdout_path, entries.map(entry => JSON.stringify(entry) + '\n').join('') + stdout_text);
         fs.writeFileSync(stderr_path, stderr);
         const end = killed_by_signal ? 'kill -9 $$' : `exit ${exit_code}`;
+        let max_downloads_branch = '';
+        if (with_max_downloads) {
+            const max_stdout_path = path.join(work_dir, 'max_stdout.txt');
+            const max_stderr_path = path.join(work_dir, 'max_stderr.txt');
+            fs.writeFileSync(max_stdout_path, with_max_downloads.entries.map(entry => JSON.stringify(entry) + '\n').join(''));
+            fs.writeFileSync(max_stderr_path, with_max_downloads.stderr || '');
+            max_downloads_branch = `case " $* " in *" --max-downloads 1 "*) cat '${max_stdout_path}'; cat '${max_stderr_path}' >&2; exit 101;; esac\n`;
+        }
         fs.ensureDirSync(path.dirname(binary_path));
-        fs.writeFileSync(binary_path, `#!/bin/sh\ncat '${stdout_path}'\ncat '${stderr_path}' >&2\n${end}\n`, {mode: 0o755});
+        fs.writeFileSync(binary_path, `#!/bin/sh\n${max_downloads_branch}cat '${stdout_path}'\ncat '${stderr_path}' >&2\n${end}\n`, {mode: 0o755});
     };
 
     const waitFor = async (what, condition, timeout_ms = 5000) => {
@@ -989,6 +999,33 @@ describe('Subscriptions', function() {
             assert.strictEqual((await db_api.getRecord('subscriptions', {id: new_sub.id}))['name'], 'Test playlist');
         });
 
+        it('Succeeds when the first video is unavailable, by asking yt-dlp for the first video it can extract', async function() {
+            const new_sub = unnamed_sub();
+            // with --playlist-end 1 yt-dlp tries only the first video: no entry, exit 1
+            stubYoutubeDL({
+                stderr: unavailable_error + '\n',
+                exit_code: 1,
+                with_max_downloads: {entries: playlist_entries.slice(1, 2), stderr: unavailable_error + '\n'}
+            });
+
+            const result = await subscriptions_api.subscribe(new_sub, null);
+
+            assert.strictEqual(result['success'], true, log_lines.join('\n'));
+            assert.strictEqual((await db_api.getRecord('subscriptions', {id: new_sub.id}))['name'], 'Test playlist');
+            assert.deepStrictEqual(logged('error'), []);
+            assert.deepStrictEqual(logged('warn'), []);
+        });
+
+        it('Succeeds, with no fallback run, when the first video is available', async function() {
+            const new_sub = unnamed_sub();
+            // a fallback run would find the stub's other branch and fail the add
+            stubYoutubeDL({entries: playlist_entries.slice(0, 1), exit_code: 0, with_max_downloads: {entries: []}});
+
+            const result = await subscriptions_api.subscribe(new_sub, null);
+
+            assert.strictEqual(result['success'], true, log_lines.join('\n'));
+        });
+
         it('Succeeds when yt-dlp exits cleanly but warns on stderr', async function() {
             const new_sub = unnamed_sub();
             stubYoutubeDL({entries: playlist_entries.slice(0, 1), stderr: 'WARNING: [youtube] No supported JavaScript runtime could be found.\n', exit_code: 0});
@@ -1005,8 +1042,10 @@ describe('Subscriptions', function() {
             const result = await subscriptions_api.subscribe(new_sub, null);
 
             assert.strictEqual(result['success'], false);
-            const errors = logged('error').join('\n');
-            assert(errors.includes('code 1') && errors.includes('Private video'), errors);
+            const errors = logged('error');
+            // the failure of the last run, then the line from subscribe itself
+            assert.strictEqual(errors.length, 2, errors.join('\n'));
+            assert(errors[0].includes('code 1') && errors[0].includes('Private video'), errors[0]);
         });
     });
 });
