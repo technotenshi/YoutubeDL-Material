@@ -641,6 +641,331 @@ describe('Downloader', function() {
         const expected_args3 =  ['-o', '%(title)s.%(ext)s', '--min-filesize', '1'];
         assert(JSON.stringify(updated_args3) === JSON.stringify(expected_args3));
     });
+    describe('Scheduler', function() {
+        const scheduler_logger = require('../logger');
+        const tick = () => new Promise(resolve => setImmediate(resolve));
+        const gate = () => {
+            let open;
+            const promise = new Promise(resolve => { open = resolve; });
+            return {promise, open};
+        };
+
+        let original_get_records, original_collect_info, original_download_queued_file, original_logger_error;
+        let original_max_concurrent;
+        let reads;        // result of every download_queue read, in order
+        let dispatched;   // [stage, uid] for every stage the scheduler started
+        let next_read_hook;
+        let release_held_read;
+
+        // A queue record as createDownload writes it, with overrides.
+        function queueRecord(overrides = {}) {
+            return Object.assign({
+                url: url,
+                type: 'video',
+                title: '',
+                user_uid: null,
+                sub_id: null,
+                sub_name: null,
+                prefetched_info: null,
+                options: {},
+                uid: uuid(),
+                step_index: 0,
+                paused: false,
+                running: false,
+                finished_step: true,
+                error: null,
+                percent_complete: null,
+                finished: false,
+                timestamp_start: Date.now()
+            }, overrides);
+        }
+
+        // An old failed download: finished, with a large error text like the live queue holds.
+        function erroredRecord(overrides = {}) {
+            return queueRecord(Object.assign({finished: true, error: 'x'.repeat(10000), error_type: 'unknown_error'}, overrides));
+        }
+
+        async function seed(records) {
+            for (const record of records) await db_api.insertRecordIntoTable('download_queue', record);
+        }
+
+        // createDownload turns checking on; drop its record so only the seeded ones are in the queue
+        async function wakeScheduler() {
+            const throwaway = await downloader_api.createDownload(url, 'video', {}, null, null, null, null, true);
+            await downloader_api.clearDownload(throwaway['uid']);
+        }
+
+        // Make the next download_queue read stop after it has read, until the returned gate opens.
+        function holdNextRead() {
+            const started = gate();
+            const release = gate();
+            next_read_hook = async () => {
+                started.open();
+                await release.promise;
+            };
+            release_held_read = release.open;
+            return {started: started.promise, release: release.open};
+        }
+
+        before(function() {
+            original_max_concurrent = config_api.getConfigItem('ytdl_max_concurrent_downloads');
+        });
+
+        beforeEach(async function() {
+            await db_api.removeAllRecords('download_queue');
+            reads = [];
+            dispatched = [];
+            next_read_hook = null;
+            release_held_read = null;
+            config_api.setConfigItem('ytdl_max_concurrent_downloads', 5);
+
+            original_get_records = db_api.getRecords;
+            db_api.getRecords = async (table, ...rest) => {
+                const live = await original_get_records(table, ...rest);
+                if (table !== 'download_queue') return live;
+                // the local DB returns its live record objects; a MongoDB read returns an independent snapshot
+                const result = JSON.parse(JSON.stringify(live));
+                reads.push(result);
+                const hook = next_read_hook;
+                next_read_hook = null;
+                if (hook) await hook(result);
+                return result;
+            };
+
+            original_collect_info = downloader_api.collectInfo;
+            original_download_queued_file = downloader_api.downloadQueuedFile;
+            downloader_api.collectInfo = async (uid) => { dispatched.push(['collectInfo', uid]); };
+            downloader_api.downloadQueuedFile = async (uid) => { dispatched.push(['downloadQueuedFile', uid]); };
+
+            original_logger_error = scheduler_logger.error;
+        });
+
+        afterEach(async function() {
+            // a failed assertion must not leave a read (and the queue lock) held for the next test
+            if (release_held_read) release_held_read();
+            await tick();
+            db_api.getRecords = original_get_records;
+            downloader_api.collectInfo = original_collect_info;
+            downloader_api.downloadQueuedFile = original_download_queued_file;
+            scheduler_logger.error = original_logger_error;
+            config_api.setConfigItem('ytdl_max_concurrent_downloads', original_max_concurrent);
+            await db_api.removeAllRecords('download_queue');
+        });
+
+        describe('Reading the queue', function() {
+            it('reads only unfinished records, however many finished ones exist', async function() {
+                this.timeout(10000); // the local DB rewrites its file on every insert
+                const waiting = [queueRecord({timestamp_start: 1}), queueRecord({timestamp_start: 2})];
+                const running = queueRecord({running: true, step_index: 2, finished_step: false, timestamp_start: 3});
+                const history = [];
+                for (let i = 0; i < 60; i++) history.push(erroredRecord());
+                await seed(history.concat(waiting, [running]));
+                await wakeScheduler();
+
+                await downloader_api.checkDownloads();
+
+                assert.strictEqual(reads.length, 1);
+                assert.strictEqual(reads[0].length, 3);
+                assert(reads[0].every(record => record['finished'] === false));
+                assert.deepStrictEqual(dispatched.map(entry => entry[1]), waiting.map(record => record['uid']));
+            });
+        });
+
+        describe('Overlapping passes', function() {
+            it('does nothing when a pass is already in flight', async function() {
+                const waiting = queueRecord();
+                await seed([waiting]);
+                await wakeScheduler();
+
+                const hold = holdNextRead();
+                const first = downloader_api.checkDownloads();
+                await hold.started;
+                await downloader_api.checkDownloads();
+                assert.strictEqual(reads.length, 1, 'second pass must not read the queue');
+
+                hold.release();
+                await first;
+                assert.deepStrictEqual(dispatched, [['collectInfo', waiting['uid']]]);
+            });
+
+            it('runs the next pass once the previous one has finished', async function() {
+                await seed([queueRecord({paused: false, finished_step: false, running: true, step_index: 1})]);
+                await wakeScheduler();
+
+                await downloader_api.checkDownloads();
+                await downloader_api.checkDownloads();
+                assert.strictEqual(reads.length, 2);
+            });
+
+            it('survives a failed read: logs it and runs again on the next pass', async function() {
+                const waiting = queueRecord();
+                await seed([waiting]);
+                await wakeScheduler();
+
+                const logged = [];
+                scheduler_logger.error = (message) => { logged.push(message instanceof Error ? message.message : String(message)); };
+                next_read_hook = async () => { throw new Error('database unavailable'); };
+
+                await downloader_api.checkDownloads();
+                assert(logged.some(message => message.includes('database unavailable')), `error not logged: ${JSON.stringify(logged)}`);
+                assert.deepStrictEqual(dispatched, []);
+
+                await downloader_api.checkDownloads();
+                assert.deepStrictEqual(dispatched, [['collectInfo', waiting['uid']]]);
+            });
+        });
+
+        describe('Choosing what to start', function() {
+            it('starts waiting downloads oldest first, whatever order they were stored in', async function() {
+                const newest = queueRecord({timestamp_start: 100});
+                const oldest = queueRecord({timestamp_start: 9});
+                const middle = queueRecord({timestamp_start: 10});
+                await seed([newest, oldest, middle]);
+                await wakeScheduler();
+
+                await downloader_api.checkDownloads();
+
+                assert.deepStrictEqual(dispatched.map(entry => entry[1]), [oldest['uid'], middle['uid'], newest['uid']]);
+            });
+
+            it('counts running downloads against ytdl_max_concurrent_downloads', async function() {
+                config_api.setConfigItem('ytdl_max_concurrent_downloads', 2);
+                const running = queueRecord({running: true, step_index: 2, finished_step: false, timestamp_start: 1});
+                const first = queueRecord({timestamp_start: 2});
+                const second = queueRecord({timestamp_start: 3});
+                await seed([running, second, first]);
+                await wakeScheduler();
+
+                await downloader_api.checkDownloads();
+
+                assert.deepStrictEqual(dispatched.map(entry => entry[1]), [first['uid']]);
+            });
+
+            it('starts nothing when the limit is 0 or negative', async function() {
+                await seed([queueRecord()]);
+                for (const limit of [0, -1]) {
+                    config_api.setConfigItem('ytdl_max_concurrent_downloads', limit);
+                    await wakeScheduler();
+                    await downloader_api.checkDownloads();
+                }
+                assert.deepStrictEqual(dispatched, []);
+            });
+
+            it('runs the info step for step 0 and the file step for step 1', async function() {
+                const needs_info = queueRecord({step_index: 0, timestamp_start: 1});
+                const needs_file = queueRecord({step_index: 1, timestamp_start: 2});
+                await seed([needs_info, needs_file]);
+                await wakeScheduler();
+
+                await downloader_api.checkDownloads();
+
+                assert.deepStrictEqual(dispatched, [['collectInfo', needs_info['uid']], ['downloadQueuedFile', needs_file['uid']]]);
+            });
+
+            it('skips paused and finished downloads', async function() {
+                const paused = queueRecord({paused: true, timestamp_start: 1});
+                const finished = queueRecord({finished: true, timestamp_start: 2});
+                const waiting = queueRecord({timestamp_start: 3});
+                await seed([paused, finished, waiting]);
+                await wakeScheduler();
+
+                await downloader_api.checkDownloads();
+
+                assert.deepStrictEqual(dispatched.map(entry => entry[1]), [waiting['uid']]);
+            });
+        });
+
+        describe('Stopping and starting again', function() {
+            it('stops reading once nothing but paused and finished downloads remain', async function() {
+                await seed([queueRecord({paused: true}), erroredRecord()]);
+                await wakeScheduler();
+
+                await downloader_api.checkDownloads();
+                assert.strictEqual(reads.length, 1);
+                await downloader_api.checkDownloads();
+                await downloader_api.checkDownloads();
+                assert.strictEqual(reads.length, 1);
+            });
+
+            it('stops reading when the queue is empty', async function() {
+                await wakeScheduler();
+                await downloader_api.checkDownloads();
+                await downloader_api.checkDownloads();
+                assert.strictEqual(reads.length, 1);
+            });
+
+            it('starts again when a download is created', async function() {
+                await wakeScheduler();
+                await downloader_api.checkDownloads();
+                const created = await downloader_api.createDownload(url, 'video', {});
+                await downloader_api.checkDownloads();
+                assert.strictEqual(reads.length, 2);
+                assert.deepStrictEqual(dispatched, [['collectInfo', created['uid']]]);
+            });
+
+            it('starts again when a download is resumed', async function() {
+                const paused = queueRecord({paused: true});
+                await seed([paused]);
+                await wakeScheduler();
+                await downloader_api.checkDownloads();
+                assert.strictEqual(reads.length, 1);
+
+                await downloader_api.resumeDownload(paused['uid']);
+                await downloader_api.checkDownloads();
+                assert.strictEqual(reads.length, 2);
+                assert.deepStrictEqual(dispatched, [['collectInfo', paused['uid']]]);
+            });
+
+            it('starts again when a download is restarted', async function() {
+                const failed = erroredRecord();
+                await seed([failed]);
+                await wakeScheduler();
+                await downloader_api.checkDownloads();
+                assert.strictEqual(reads.length, 1);
+
+                const restarted = await downloader_api.restartDownload(failed['uid']);
+                await downloader_api.checkDownloads();
+                assert.strictEqual(reads.length, 2);
+                assert.deepStrictEqual(dispatched, [['collectInfo', restarted['uid']]]);
+            });
+
+            it('keeps the wake-up of a download created while an empty read is in flight', async function() {
+                await wakeScheduler();
+
+                const hold = holdNextRead();
+                const pass = downloader_api.checkDownloads();
+                await hold.started;
+                const creating = downloader_api.createDownload(url, 'video', {}, null, null, null, null, true);
+                for (let i = 0; i < 20; i++) await tick();
+                hold.release();
+                await pass;
+                await creating;
+
+                const reads_before = reads.length;
+                await downloader_api.checkDownloads();
+                assert.strictEqual(reads.length, reads_before + 1, 'the pass after create must read the queue');
+            });
+
+            it('keeps the wake-up of a download resumed while an all-paused read is in flight', async function() {
+                const paused = queueRecord({paused: true});
+                await seed([paused]);
+                await wakeScheduler();
+
+                const hold = holdNextRead();
+                const pass = downloader_api.checkDownloads();
+                await hold.started;
+                const resuming = downloader_api.resumeDownload(paused['uid']);
+                for (let i = 0; i < 20; i++) await tick();
+                hold.release();
+                await pass;
+                await resuming;
+
+                await downloader_api.checkDownloads();
+                assert.deepStrictEqual(dispatched, [['collectInfo', paused['uid']]]);
+            });
+        });
+    });
+
     describe('Twitch', async function () {
         const twitch_api = require('../twitch');
         const example_vod = '1790315420';

@@ -163,21 +163,36 @@ async function fixDownloadState() {
     }
 }
 
+// Set while a scheduler pass runs, so a slow pass is never overlapped by the next timer tick.
+let check_downloads_in_flight = false;
+
 async function checkDownloads() {
-    if (!should_check_downloads) return;
+    if (!should_check_downloads || check_downloads_in_flight) return;
+    check_downloads_in_flight = true;
+    try {
+        await runSchedulerPass();
+    } catch (err) {
+        logger.error(`Checking downloads failed: ${err && err.message ? err.message : err}`);
+    } finally {
+        check_downloads_in_flight = false;
+    }
+}
 
-    const downloads = await db_api.getRecords('download_queue');
-    downloads.sort((download1, download2) => download1.timestamp_start - download2.timestamp_start);
-
-    await mutex.runExclusive(async () => {
-        // avoid checking downloads unnecessarily, but double check that should_check_downloads is still true
-        const running_downloads = downloads.filter(download => !download['paused'] && !download['finished']);
+async function runSchedulerPass() {
+    // Unfinished records are all the scheduler needs: running ones use up slots, waiting ones are started.
+    // Finished and errored history is never read, so the cost of a pass does not grow with it.
+    // The read and the idle decision share the lock with createDownload/resumeDownload, so a download
+    // added or resumed meanwhile either shows up in this read or turns checking back on afterwards.
+    const downloads = await mutex.runExclusive(async () => {
+        const unfinished_downloads = await db_api.getRecords('download_queue', {finished: false});
+        const running_downloads = unfinished_downloads.filter(download => !download['paused']);
         if (running_downloads.length === 0) {
             should_check_downloads = false;
             logger.verbose('Disabling checking downloads as none are available.');
         }
-        return;
+        return unfinished_downloads;
     });
+    downloads.sort((download1, download2) => download1.timestamp_start - download2.timestamp_start);
 
     let running_downloads_count = downloads.filter(download => download['running']).length;
     const waiting_downloads = downloads.filter(download => !download['paused'] && download['finished_step'] && !download['finished']);
@@ -204,6 +219,9 @@ async function checkDownloads() {
         }
     }
 }
+
+// one scheduler pass; setupDownloads runs it on a timer, tests call it directly
+exports.checkDownloads = checkDownloads;
 
 function killActiveDownload(download) {
     const child_process = download_to_child_process[download['uid']];
