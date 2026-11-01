@@ -15,5 +15,5 @@ PR #10 squash merged 16 Upstream commits into one fork commit. The files matched
 
 - `main` is linear except at Upstream sync points, where a merge commit appears. Upstream's own history already contains merge commits.
 - The ruleset on `main` now allows `squash` and `merge`, and the repo allows merge commits. Nothing stops a non-sync PR from using a merge commit, so the choice is a convention.
-- The Checkpoint is moved only after a sync PR has merged and been verified.
+- The Checkpoint is `git merge-base main upstream/master`. It moves only when an Upstream sync PR merges.
 - On 2026-10-31 `main` was rebuilt once, with a force-push, to undo PR #10. See `docs/DECISIONS.md`.
