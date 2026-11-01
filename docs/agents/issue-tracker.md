@@ -20,7 +20,9 @@ File issues only into the user's own repo. Never file into `mattpocock/skills` (
 
 ## Fork
 
-This repository is a fork of `Tzahi12345/YoutubeDL-Material`. Target `technotenshi/YoutubeDL-Material`, never `Tzahi12345/YoutubeDL-Material`. Pass `--repo technotenshi/YoutubeDL-Material` if `gh` ever asks which repo to use or picks the upstream.
+This repository is a fork of `Tzahi12345/YoutubeDL-Material`. Target `technotenshi/YoutubeDL-Material`, never `Tzahi12345/YoutubeDL-Material`. Never open a pull request or issue on the upstream. Pass `--repo technotenshi/YoutubeDL-Material` if `gh` ever asks which repo to use or picks the upstream.
+
+`gh api` does not accept `--repo`, and the `{owner}/{repo}` placeholders expand from `gh`'s default repo, which can be the upstream. For `gh api`, write the endpoint with the fork spelled out (`repos/technotenshi/YoutubeDL-Material/...`) and read `<owner>/<repo>` in this file as `technotenshi/YoutubeDL-Material`. Setting `GH_REPO=technotenshi/YoutubeDL-Material` for the command also works.
 
 ## Pull requests as a triage surface
 
@@ -29,7 +31,7 @@ This repository is a fork of `Tzahi12345/YoutubeDL-Material`. Target `technotens
 When set to `yes`, PRs run through the same labels and states as issues, using the `gh pr` equivalents:
 
 - **Read a PR**: `gh pr view <number>`, then `gh pr view <number> --comments` (off a TTY, `--comments` prints only the comments, not the body), and `gh pr diff <number>` for the diff.
-- **List external PRs for triage**: `gh api --paginate 'repos/{owner}/{repo}/pulls?state=open' --jq '.[] | select(.author_association | IN("OWNER","MEMBER","COLLABORATOR") | not) | {number, title, author: .user.login, author_association, labels: [.labels[].name]}'`.
+- **List external PRs for triage**: `gh api --paginate 'repos/technotenshi/YoutubeDL-Material/pulls?state=open' --jq '.[] | select(.author_association | IN("OWNER","MEMBER","COLLABORATOR") | not) | {number, title, author: .user.login, author_association, labels: [.labels[].name]}'`.
 - **Comment / label / close**: `gh pr comment`, `gh pr edit --add-label`/`--remove-label`, `gh pr close`.
 
 GitHub shares one number space across issues and PRs, so a bare `#42` may be either: resolve with `gh pr view 42` and fall back to `gh issue view 42`.
