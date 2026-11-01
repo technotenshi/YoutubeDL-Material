@@ -12,6 +12,8 @@ The skills speak in terms of five canonical triage roles. This file maps those r
 
 When a skill mentions a role (e.g. "apply the AFK-ready triage label"), use the corresponding label string from this table.
 
+Triage also sets a priority, using the `priority:*` labels defined in `priority-labels.md`. Apply exactly one alongside the category and state roles.
+
 Edit the right-hand column to match whatever vocabulary you actually use.
 
 Labels must exist before they can be applied: `gh issue create --label` and `gh issue edit --add-label` fail on a missing label and do not create it. Create any missing label once with `gh label create <name>`, and check with `gh label list`.
